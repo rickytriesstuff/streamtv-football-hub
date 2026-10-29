@@ -71,6 +71,23 @@ function applyState(newState){if(newState&&Array.isArray(newState.channels)&&new
 $("adminOpen").onclick=()=>showView(true);$("navStreams").onclick=()=>showView(true);$("backHome").onclick=()=>showView(false);$("verifyPasscode").onclick=()=>{const expected=[48,48,51,48,57,51].map(x=>String.fromCharCode(x)).join("");if($("ownerPasscode").value===expected){ownerUnlocked=true;$("passcodeModal").classList.remove("show");showView(true)}else{$("passcodeError").style.display="block"}};$("ownerPasscode").addEventListener("keydown",e=>{if(e.key==="Enter")$("verifyPasscode").click()});$("cancelPasscode").onclick=()=>$("passcodeModal").classList.remove("show");$("thumbnailUpload").addEventListener("change",e=>{const file=e.target.files&&e.target.files[0];if(!file)return;if(!file.type.startsWith("image/")){toast("Choose an image file.");return}const reader=new FileReader();reader.onload=()=>{const image=new Image();image.onload=()=>{const canvas=document.createElement("canvas"),scale=Math.min(1,1200/image.width);canvas.width=Math.round(image.width*scale);canvas.height=Math.round(image.height*scale);canvas.getContext("2d").drawImage(image,0,0,canvas.width,canvas.height);pendingThumbnail=canvas.toDataURL("image/jpeg",0.78);renderThumbnailPreview();toast("Thumbnail ready. Save featured match to apply it.")};image.src=reader.result};reader.readAsDataURL(file)});$("removeThumbnail").onclick=()=>{pendingThumbnail="";$("thumbnailUpload").value="";renderThumbnailPreview()};$("navHome").onclick=()=>showView(false);$("navTop").onclick=()=>window.scrollTo({top:0,behavior:"smooth"});$("search").addEventListener("input",e=>renderChannels(e.target.value));$("closePlayer").onclick=()=>$("playerSection").classList.remove("open");$("watchFeatured").onclick=()=>playChannel(state.featured.channelId);$("saveFeatured").onclick=saveFeatured;$("saveChannels").onclick=saveChannels;$("exportConfig").onclick=()=>{const blob=new Blob([JSON.stringify(state,null,2)],{type:"application/json"});const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="streamtv-config.json";a.click();URL.revokeObjectURL(a.href)};
 $("connectFirebase").onclick=async()=>{try{const cfg=JSON.parse($("firebaseConfig").value);ownerEmail=$("ownerEmail").value.trim().toLowerCase();if(!cfg.apiKey||!cfg.databaseURL||!ownerEmail)throw new Error("Add valid Firebase config and owner email first.");app=initializeApp(cfg,"streamtv-"+Date.now());db=getDatabase(app);auth=getAuth(app);onAuthStateChanged(auth,user=>{isOwner=!!user&&user.email?.toLowerCase()===ownerEmail;$("firebaseStatus").textContent=user?(isOwner?"Signed in as owner. Editing and live sync enabled.":"Signed in, but this account is not the configured owner."):"Not signed in."; $("connectionNotice").className=isOwner?"notice":"notice warn";$("connectionNotice").textContent=isOwner?"Firebase connected. Owner authentication is active; database rules must still restrict writes to the owner.":"Firebase connected. Sign in with the configured owner account to edit shared streams.";});if(unsubscribeData)unsubscribeData();unsubscribeData=onValue(ref(db,"streamtv/publicState"),snap=>{if(snap.exists())applyState(snap.val())});$("firebaseStatus").textContent="Firebase connected. Sign in as owner to edit.";toast("Firebase connected")}catch(e){$("firebaseStatus").textContent=e.message;toast("Firebase setup: "+e.message)}};
 $("signInOwner").onclick=()=>$("ownerModal").classList.add("show");$("cancelSignIn").onclick=()=>$("ownerModal").classList.remove("show");$("doSignIn").onclick=async()=>{try{if(!auth)throw new Error("Connect Firebase first.");const cred=await signInWithEmailAndPassword(auth,$("signEmail").value.trim(),$("signPassword").value);if(cred.user.email.toLowerCase()!==ownerEmail){await signOut(auth);throw new Error("That account is not the configured owner email.")}$("ownerModal").classList.remove("show");isOwner=true;toast("Owner signed in")}catch(e){toast(e.message)}};$("signOutOwner").onclick=async()=>{if(auth)await signOut(auth);isOwner=false;toast("Signed out")};
-safeLocal();updateFeatured();renderChannels();$("year").textContent=new Date().getFullYear();
+safeLocal();updateFeatured();renderChannels();
+ try {
+  const cfg = {
+    apiKey: "AIzaSyBAHqRluyUMghFR7vF5SsSedwoQcrCfrHQ",
+    authDomain: "streamtv-football-hub.firebaseapp.com",
+    databaseURL: "https://streamtv-football-hub-default-rtdb.firebaseio.com",
+    projectId: "streamtv-football-hub",
+    storageBucket: "streamtv-football-hub.firebasestorage.app",
+    messagingSenderId: "551145810281",
+    appId: "1:551145810281:web:6b166922f25fc0eb57b5f8",
+    measurementId: "G-QX6S3LM03S"
+  };
+  $("firebaseConfig").value = JSON.stringify(cfg);
+  $("ownerEmail").value = "derrickmaena@gmail.com";
+  $("connectFirebase").click();
+} catch (e) {
+  console.error("StreamTV Firebase startup:", e);
+} $("year").textContent=new Date().getFullYear();
 </script>
 </body></html>
