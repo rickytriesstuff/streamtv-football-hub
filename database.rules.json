@@ -1,0 +1,10 @@
+{
+  "rules": {
+    "streamtv": {
+      "publicState": {
+        ".read": true,
+        ".write": "auth != null && auth.token.email === 'REPLACE_WITH_OWNER_EMAIL'"
+      }
+    }
+  }
+}
