@@ -3,7 +3,21 @@
     "streamtv": {
       "publicState": {
         ".read": true,
-        ".write": "auth != null && auth.token.email === 'REPLACE_WITH_OWNER_EMAIL'"
+        ".write": "auth != null && auth.token.email === 'derrickmaena@gmail.com'"
+      },
+      "analytics": {
+        "visits": {
+          "$uid": {
+            ".read": "auth != null && auth.token.email === 'derrickmaena@gmail.com'",
+            ".write": "auth != null && auth.uid === $uid"
+          }
+        },
+        "active": {
+          "$uid": {
+            ".read": "auth != null && auth.token.email === 'derrickmaena@gmail.com'",
+            ".write": "auth != null && auth.uid === $uid"
+          }
+        }
       }
     }
   }
