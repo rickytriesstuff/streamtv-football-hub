@@ -10,13 +10,15 @@
           "$uid": {
             ".read": "auth != null && auth.token.email === 'derrickmaena@gmail.com'",
             ".write": "auth != null && auth.uid === $uid"
-          }
+          },
+          ".read": "auth != null && auth.token.email === 'derrickmaena@gmail.com'"
         },
         "active": {
           "$uid": {
             ".read": "auth != null && auth.token.email === 'derrickmaena@gmail.com'",
             ".write": "auth != null && auth.uid === $uid"
-          }
+          },
+          ".read": "auth != null && auth.token.email === 'derrickmaena@gmail.com'"
         }
       }
     }
