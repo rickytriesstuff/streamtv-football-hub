@@ -1,0 +1,16 @@
+{
+  "id": "/",
+  "name": "StreamTV Football Hub",
+  "short_name": "StreamTV",
+  "description": "Your football dashboard. Pick a competition, choose a channel, and watch from one clean app.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#080b0a",
+  "theme_color": "#080b0a",
+  "categories": ["sports", "entertainment"],
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
