@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+<rect width="512" height="512" rx="112" fill="#080b0a"/>
+<rect x="22" y="22" width="468" height="468" rx="98" fill="#111614" stroke="#b7ff3c" stroke-width="12"/>
+<circle cx="256" cy="220" r="116" fill="#b7ff3c"/>
+<path d="M256 126l35 26-13 41h-44l-13-41zM153 199l39-16 29 32-14 42h-43l-24-30zM359 199l-39-16-29 32 14 42h43l24-30zM193 291l25-35h76l25 35-25 40h-76z" fill="#080b0a"/>
+<text x="256" y="414" font-family="Arial,sans-serif" font-size="62" font-weight="900" text-anchor="middle" fill="#f4f7f3">STREAMTV</text>
+</svg>
