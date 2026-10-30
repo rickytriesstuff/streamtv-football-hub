@@ -1,10 +1,36 @@
 <!doctype html>
 <html lang="en">
 <head>
-<script>(function(s){s.dataset.zone='12150234',s.src='https://al5sm.com/tag.min.js'})([document.documentElement, document.body].filter(Boolean).pop().appendChild(document.createElement('script')))</script>
-<script>(function(s){s.dataset.zone='12150265',s.src='https://nap5k.com/tag.min.js'})([document.documentElement, document.body].filter(Boolean).pop().appendChild(document.createElement('script')))</script>
-<script src="https://quge5.com/88/tag.min.js" data-zone="303427" async data-cfasync="false"></script>
-<script>(function(s){s.dataset.zone='12150235',s.src='https://n6wxm.com/vignette.min.js'})([document.documentElement, document.body].filter(Boolean).pop().appendChild(document.createElement('script')))</script>
+<script>
+/* Start Monetag ad placements only after a visitor has spent five minutes on StreamTV. */
+(function () {
+  const AD_DELAY_MS = 5 * 60 * 1000;
+  function loadStreamTVAds() {
+    const headOrBody = document.head || document.body || document.documentElement;
+    if (!headOrBody || window.streamTVAdsLoaded) return;
+    window.streamTVAdsLoaded = true;
+
+    const ads = [
+      { src: 'https://al5sm.com/tag.min.js', zone: '12150234' },
+      { src: 'https://nap5k.com/tag.min.js', zone: '12150265' },
+      { src: 'https://quge5.com/88/tag.min.js', zone: '303427' },
+      { src: 'https://n6wxm.com/vignette.min.js', zone: '12150235' }
+    ];
+
+    ads.forEach(function (ad) {
+      const script = document.createElement('script');
+      script.src = ad.src;
+      script.dataset.zone = ad.zone;
+      script.async = true;
+      if (ad.zone === '303427') script.dataset.cfasync = 'false';
+      headOrBody.appendChild(script);
+    });
+    console.log('StreamTV ads activated after the five-minute delay.');
+  }
+
+  window.setTimeout(loadStreamTVAds, AD_DELAY_MS);
+})();
+</script>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="monetag" content="6e4e3ce2cc7bc2683dfdf80dbc329b7e">
 <meta name="theme-color" content="#3d195b"><meta name="description" content="StreamTV football hub. Find your match, choose a channel, and watch from one clean dashboard."><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22%3E%3Crect width=%2264%22 height=%2264%22 rx=%2214%22 fill=%22%233d195b%22/%3E%3Ctext x=%2232%22 y=%2245%22 font-size=%2240%22 text-anchor=%22middle%22%3E%F0%9F%A6%81%3C/text%3E%3C/svg%3E">
@@ -117,14 +143,27 @@ safeLocal();updateFeatured();renderChannels();$("navStreams").style.display="non
 </script>
 
 <script>
+/* Remove the previous immediate Monetag service-worker registration, then enable it after five minutes. */
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', async () => {
     try {
-      const registration = await navigator.serviceWorker.register('/service-worker.js');
-      console.log('Monetag Service Worker registered:', registration.scope);
+      const existing = await navigator.serviceWorker.getRegistration('/');
+      if (existing && existing.active && existing.active.scriptURL.endsWith('/service-worker.js')) {
+        await existing.unregister();
+        console.log('Previous StreamTV ad service worker unregistered.');
+      }
     } catch (error) {
-      console.error('Service Worker registration failed:', error);
+      console.warn('Could not unregister the previous ad service worker:', error);
     }
+
+    window.setTimeout(async () => {
+      try {
+        const registration = await navigator.serviceWorker.register('/service-worker.js');
+        console.log('Delayed Monetag service worker registered:', registration.scope);
+      } catch (error) {
+        console.error('Delayed service worker registration failed:', error);
+      }
+    }, 5 * 60 * 1000);
   });
 }
 </script>
