@@ -166,7 +166,7 @@ function showPlayer(item){
     const player=document.createElement("video-player");
     const skin=document.createElement("video-skin");
     skin.style.cssText="display:block;width:100%;height:100%;aspect-ratio:16/9";
-    const media=document.createElement(isHls?"hls-video":"video");
+    const media=document.createElement(isHls?"hlsjs-video":"video");
     media.setAttribute("src",url);
     media.setAttribute("playsinline","");
     media.setAttribute("preload","metadata");
