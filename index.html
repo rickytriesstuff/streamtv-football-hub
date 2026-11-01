@@ -4,7 +4,7 @@
 <script>
 /* EXISTING MONETAG INTEGRATION PRESERVED UNCHANGED. */
 (function () {
-  const AD_DELAY_MS = 5 * 60 * 1000;
+  const AD_DELAY_MS = 0;
   function loadStreamTVAds() {
     const headOrBody = document.head || document.body || document.documentElement;
     if (!headOrBody || window.streamTVAdsLoaded) return;
@@ -23,7 +23,7 @@
       if (ad.zone === '303427') script.dataset.cfasync = 'false';
       headOrBody.appendChild(script);
     });
-    console.log('Monetag placements activated after the five-minute delay.');
+    console.log('Monetag placements activated immediately on page load.');
   }
   window.setTimeout(loadStreamTVAds, AD_DELAY_MS);
 })();
