@@ -4,31 +4,8 @@
 <meta name="theme-color" content="#09090d"><meta name="description" content="RickStreams: discover and share short videos.">
 <meta name="monetag" content="6e4e3ce2cc7bc2683dfdf80dbc329b7e">
 <script>
-/* EXISTING MONETAG INTEGRATION PRESERVED UNCHANGED. */
-(function () {
-  const AD_DELAY_MS = 0;
-  function loadStreamTVAds() {
-    const headOrBody = document.head || document.body || document.documentElement;
-    if (!headOrBody || window.streamTVAdsLoaded) return;
-    window.streamTVAdsLoaded = true;
-    const ads = [
-      { src: 'https://al5sm.com/tag.min.js', zone: '12150234' },
-      { src: 'https://nap5k.com/tag.min.js', zone: '12150265' },
-      { src: 'https://quge5.com/88/tag.min.js', zone: '303427' },
-      { src: 'https://n6wxm.com/vignette.min.js', zone: '12150235' }
-    ];
-    ads.forEach(function (ad) {
-      const script = document.createElement('script');
-      script.src = ad.src;
-      script.dataset.zone = ad.zone;
-      script.async = true;
-      if (ad.zone === '303427') script.dataset.cfasync = 'false';
-      headOrBody.appendChild(script);
-    });
-    console.log('Monetag placements activated immediately on page load.');
-  }
-  window.setTimeout(loadStreamTVAds, AD_DELAY_MS);
-})();
+/* MONETAG TEMPORARILY PAUSED. Existing placements are retained for later reactivation. */
+window.RICKSTREAMS_MONETAG_PAUSED = true;
 </script>
 <link rel="manifest" href="/manifest.json"><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23ed174c'/%3E%3Cpath d='M24 15v34l27-17z' fill='white'/%3E%3C/svg%3E">
 <title>RickStreams | Short videos, big moments</title>
@@ -68,7 +45,14 @@ document.querySelectorAll("[data-role]").forEach(b=>b.onclick=()=>{role=b.datase
 $("adminOpen").onclick=()=>$("adminModal").classList.add("open");$("closeAdmin").onclick=()=>$("adminModal").classList.remove("open");
 $("joinBtn").onclick=()=>openModal("viewer");$("viewerBtn").onclick=()=>openModal("viewer");$("creatorBtn").onclick=()=>openModal("creator");$("mobileCreator").onclick=()=>openModal("creator");$("loginBtn").onclick=()=>openModal("viewer","login");$("mobileProfile").onclick=()=>auth.currentUser?signOut(auth):openModal("viewer","login");$("closeModal").onclick=()=>$("accountModal").classList.remove("open");
 $("signupForm").onsubmit=async e=>{e.preventDefault();$("submitSignup").disabled=true;$("authMessage").textContent="Connecting securely...";try{let cred;if(mode==="login"){cred=await signInWithEmailAndPassword(auth,$("email").value.trim(),$("password").value)}else{cred=await createUserWithEmailAndPassword(auth,$("email").value.trim(),$("password").value);await updateProfile(cred.user,{displayName:$("displayName").value.trim()});localStorage.setItem("rickstreams_signup_role",role);localStorage.setItem("rickstreams_display_name",$("displayName").value.trim())}$("authMessage").textContent=mode==="login"?"Signed in.":"Account created. Your "+role+" account is ready for the next setup step.";}catch(err){$("authMessage").textContent=err.message}finally{$("submitSignup").disabled=false}};
-onAuthStateChanged(auth,user=>{$("loginBtn").textContent=user?"Account":"Log in";$("adminOpen").style.display=user&&user.email===OWNER_EMAIL?"inline-block":"none";if(user){$("mobileProfile").innerHTML="<span>◉</span>Account";}});
+onAuthStateChanged(auth,user=>{
+  const isOwner=!!(user&&user.email&&user.email.toLowerCase()===OWNER_EMAIL.toLowerCase());
+  $("loginBtn").textContent=user?"Account":"Log in";
+  $("adminOpen").style.display=isOwner?"inline-block":"none";
+  $("adminOpen").setAttribute("aria-hidden",isOwner?"false":"true");
+  if(user){$("mobileProfile").innerHTML="<span>◉</span>Account";}
+  console.log("RickStreams auth status:",user?user.email:"signed out","owner access:",isOwner);
+});
 const videosRef=dbRef(db,"/streamtv/publicState/videos");
 onValue(videosRef,snap=>{uploadedVideos=snap.val()||{};renderUploadedVideos();});
 function renderUploadedVideos(){const feed=$("feed");feed.querySelectorAll("[data-uploaded='true']").forEach(n=>n.remove());Object.entries(uploadedVideos).reverse().forEach(([id,v])=>{if(!v||!v.videoUrl)return;const card=document.createElement("article");card.className="video";card.dataset.uploaded="true";const thumb=document.createElement("div");thumb.className="thumb";thumb.style.padding="0";const media=document.createElement("video");media.src=v.videoUrl;media.muted=true;media.playsInline=true;media.preload="metadata";media.style.cssText="width:100%;height:100%;object-fit:cover";thumb.appendChild(media);const dur=document.createElement("span");dur.className="duration";dur.textContent=v.orientation==="horizontal"?"HORIZONTAL":"VERTICAL";thumb.appendChild(dur);const info=document.createElement("div");info.className="video-info";const av=document.createElement("div");av.className="avatar";av.textContent="R";const details=document.createElement("div");const title=document.createElement("div");title.className="vtitle";title.textContent=v.title||"Untitled video";const meta=document.createElement("div");meta.className="vmeta";meta.textContent="@rickstreams · "+(v.views||0)+" real views";details.append(title,meta);info.append(av,details);card.append(thumb,info);card.onclick=()=>{const win=window.open("","_blank");if(win){win.document.write("<title>"+String(v.title||"RickStreams video").replace(/[<>]/g,"")+"</title><video controls autoplay playsinline style='width:100%;height:100%;background:#000' src='"+String(v.videoUrl).replace(/'/g,"%27")+"'></video>");}};feed.prepend(card);});}
