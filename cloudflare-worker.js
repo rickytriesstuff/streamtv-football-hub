@@ -141,7 +141,11 @@ async function paypalRequest(env,path,method="GET",body=null){
   const token=await paypalToken(env);
   const r=await fetch(paypalBase(env)+path,{method,headers:{Authorization:"Bearer "+token,"Content-Type":"application/json",Prefer:"return=representation"},...(body?{body:JSON.stringify(body)}:{})});
   const d=await r.json().catch(()=>({}));
-  if(!r.ok) throw new Error("PayPal API error: "+(d.message||d.details?.[0]?.description||r.status));
+  if(!r.ok) {
+    const detail=(d.details||[]).map(x=>[x.issue,x.description].filter(Boolean).join(": ")).filter(Boolean).join(" | ");
+    const debug=d.debug_id?" (PayPal debug ID: "+d.debug_id+")":"";
+    throw new Error("PayPal API error "+r.status+": "+(d.name||"API request failed")+" - "+(d.message||"No message returned.")+(detail?" Details: "+detail:"")+debug);
+  }
   return d;
 }
 async function setupPaypalPlan(env){
