@@ -148,32 +148,38 @@ async function paypalRequest(env,path,method="GET",body=null){
   }
   return d;
 }
+async function activatePaypalPlanSafely(env, planId) {
+  const path="/v1/billing/plans/"+encodeURIComponent(planId);
+  let current=await paypalRequest(env,path);
+  if(current.status==="ACTIVE") return current;
+  if(current.status!=="CREATED" && current.status!=="INACTIVE") {
+    throw new Error("PayPal plan "+planId+" has status "+(current.status||"unknown")+". It cannot be activated in this state.");
+  }
+  try {
+    await paypalRequest(env,path+"/activate","POST",{});
+  } catch (error) {
+    // PayPal can return PLAN_STATUS_INVALID if the plan became active between
+    // the status read and activation request. Re-read before treating it as failure.
+    current=await paypalRequest(env,path);
+    if(current.status==="ACTIVE") return current;
+    throw new Error(error.message+" Current PayPal plan status after re-check: "+(current.status||"unknown"));
+  }
+  current=await paypalRequest(env,path);
+  if(current.status!=="ACTIVE") throw new Error("PayPal plan activation did not complete. Current plan status: "+(current.status||"unknown"));
+  return current;
+}
 async function setupPaypalPlan(env){
   if(!env.CREATOR_SUBSCRIPTIONS) throw new Error("Cloudflare KV binding CREATOR_SUBSCRIPTIONS is missing.");
   const existingPlanId=await env.CREATOR_SUBSCRIPTIONS.get("paypal:plan_id");
   if(existingPlanId){
-    const existingPlan=await paypalRequest(env,"/v1/billing/plans/"+encodeURIComponent(existingPlanId));
-    if(existingPlan.status==="ACTIVE") return {productId:existingPlan.product_id,planId:existingPlan.id,status:"ACTIVE",reused:true};
-    if(existingPlan.status==="CREATED"||existingPlan.status==="INACTIVE"){
-      const activated=await paypalRequest(env,"/v1/billing/plans/"+encodeURIComponent(existingPlanId)+"/activate","POST",{});
-      const checked=await paypalRequest(env,"/v1/billing/plans/"+encodeURIComponent(existingPlanId));
-      if(checked.status!=="ACTIVE") throw new Error("PayPal plan activation did not complete. Current plan status: "+(checked.status||"unknown"));
-      return {productId:checked.product_id,planId:checked.id,status:checked.status,reused:true};
-    }
-    throw new Error("An existing PayPal plan was found with status "+(existingPlan.status||"unknown")+". No duplicate plan was created. Please review this plan in PayPal Developer Dashboard.");
+    const current=await activatePaypalPlanSafely(env,existingPlanId);
+    return {productId:current.product_id,planId:current.id,status:current.status,reused:true};
   }
   const product=await paypalRequest(env,"/v1/catalogs/products","POST",{name:"RickStreams Creator Membership",description:"Monthly creator membership for RickStreams",type:"SERVICE",category:"SOFTWARE"});
   const plan=await paypalRequest(env,"/v1/billing/plans","POST",{product_id:product.id,name:"RickStreams Creator Monthly",description:"RickStreams creator membership, billed monthly",billing_cycles:[{frequency:{interval_unit:"MONTH",interval_count:1},tenure_type:"REGULAR",sequence:1,total_cycles:0,pricing_scheme:{fixed_price:{value:"1.99",currency_code:"USD"}}}],payment_preferences:{auto_bill_outstanding:true,setup_fee_failure_action:"CANCEL",payment_failure_threshold:1}});
   await env.CREATOR_SUBSCRIPTIONS.put("paypal:plan_id",plan.id);
-  let current=plan;
-  if(current.status==="CREATED"||current.status==="INACTIVE"){
-    await paypalRequest(env,"/v1/billing/plans/"+encodeURIComponent(plan.id)+"/activate","POST",{});
-    current=await paypalRequest(env,"/v1/billing/plans/"+encodeURIComponent(plan.id));
-  }else if(current.status!=="ACTIVE"){
-    throw new Error("PayPal created the plan, but its status is "+(current.status||"unknown")+". The plan ID has been saved so setup will not create duplicates.");
-  }
-  if(current.status!=="ACTIVE") throw new Error("PayPal plan is not active yet. Current status: "+(current.status||"unknown"));
-  return {productId:product.id,planId:plan.id,status:current.status,reused:false};
+  const current=await activatePaypalPlanSafely(env,plan.id);
+  return {productId:current.product_id||product.id,planId:current.id||plan.id,status:current.status,reused:false};
 }
 async function createPaypalSubscription(request,env,user){
   if(!env.CREATOR_SUBSCRIPTIONS) throw new Error("Cloudflare KV binding CREATOR_SUBSCRIPTIONS is missing.");
