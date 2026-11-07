@@ -384,6 +384,7 @@ async function publishVideoToFirebase(request, env, user, origin) {
   }
   const verify = await firebaseRead(dbPath, token);
   if (!verify.data || verify.data.uploadedBy !== user.localId) throw new Error("Firebase accepted the publish request but the video record could not be verified.");
+  return { ok: true, id: videoId, record };
 }
 
 function firebaseUrl(path, token) {
@@ -416,22 +417,6 @@ async function firebaseAdminHealth(env) {
   return {ok:true,projectId,databaseRead:true,databaseWrite:true,visibleVideoRecords:read.data&&typeof read.data==="object"?Object.keys(read.data).length:0};
 }
 
-function firebaseUrl(path, token) {
-  return "https://streamtv-football-hub-default-rtdb.firebaseio.com/" + path + ".json?access_token=" + encodeURIComponent(token);
-}
-async function firebaseRead(path, token, withEtag=false) {
-  const response = await fetch(firebaseUrl(path, token), {headers: withEtag ? {"X-Firebase-ETag":"true"} : {}});
-  const raw = await response.text();
-  if (!response.ok) throw new Error("Firebase read failed ("+response.status+"): "+raw.slice(0,250));
-  return {data:raw ? JSON.parse(raw) : null, etag:response.headers.get("ETag")};
-}
-async function firebaseCompareAndSet(path, value, token, etag) {
-  return fetch(firebaseUrl(path, token), {
-    method:"PUT",
-    headers:{"Content-Type":"application/json","If-Match":etag},
-    body:JSON.stringify(value)
-  });
-}
 async function awardVerifiedView(env, session, viewerUid, sessionId) {
   const {token,projectId}=await serviceAccessToken(env);
   if(projectId!=="streamtv-football-hub") throw new Error("Firebase service account belongs to the wrong project.");
