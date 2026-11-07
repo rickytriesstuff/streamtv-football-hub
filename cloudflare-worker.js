@@ -157,6 +157,61 @@ async function paypalRequest(env,path,method="GET",body=null){
   }
   return d;
 }
+
+function paypalLiveBase(){return "https://api-m.paypal.com";}
+async function paypalLiveToken(env){
+  if(!env.PAYPAL_LIVE_CLIENT_ID||!env.PAYPAL_LIVE_CLIENT_SECRET) throw new Error("Live PayPal credentials are missing. Add PAYPAL_LIVE_CLIENT_ID and PAYPAL_LIVE_CLIENT_SECRET in Cloudflare.");
+  const auth=btoa(env.PAYPAL_LIVE_CLIENT_ID+":"+env.PAYPAL_LIVE_CLIENT_SECRET);
+  const r=await fetch(paypalLiveBase()+"/v1/oauth2/token",{method:"POST",headers:{Authorization:"Basic "+auth,"Content-Type":"application/x-www-form-urlencoded"},body:"grant_type=client_credentials"});
+  const d=await r.json();if(!r.ok||!d.access_token)throw new Error("PayPal Live authentication failed: "+(d.error_description||d.error||r.status));
+  return d.access_token;
+}
+async function paypalLiveRequest(env,path,method="GET",body=null){
+  const token=await paypalLiveToken(env);
+  const r=await fetch(paypalLiveBase()+path,{method,headers:{Authorization:"Bearer "+token,"Content-Type":"application/json",Prefer:"return=representation"},...(body?{body:JSON.stringify(body)}:{})});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok){const detail=(d.details||[]).map(x=>[x.issue,x.description].filter(Boolean).join(": ")).filter(Boolean).join(" | ");const debug=d.debug_id?" (PayPal debug ID: "+d.debug_id+")":"";throw new Error("PayPal Live API error "+r.status+": "+(d.name||"API request failed")+" - "+(d.message||"No message returned.")+(detail?" Details: "+detail:"")+debug);}
+  return d;
+}
+async function setupPaypalLivePlan(env){
+  if(!env.CREATOR_SUBSCRIPTIONS)throw new Error("Creator subscriptions KV binding is missing.");
+  const existing=await env.CREATOR_SUBSCRIPTIONS.get("paypal:live:plan_id");
+  if(existing){const current=await paypalLiveRequest(env,"/v1/billing/plans/"+encodeURIComponent(existing));if(current.status!=="ACTIVE")throw new Error("Saved Live plan is not active. Status: "+(current.status||"unknown"));return {productId:current.product_id,planId:current.id,status:current.status,reused:true,mode:"live"};}
+  const product=await paypalLiveRequest(env,"/v1/catalogs/products","POST",{name:"RickStreams Creator Membership",description:"Monthly creator membership for RickStreams",type:"SERVICE",category:"SOFTWARE"});
+  const plan=await paypalLiveRequest(env,"/v1/billing/plans","POST",{product_id:product.id,name:"RickStreams Creator Monthly",description:"RickStreams creator membership, billed monthly",billing_cycles:[{frequency:{interval_unit:"MONTH",interval_count:1},tenure_type:"REGULAR",sequence:1,total_cycles:0,pricing_scheme:{fixed_price:{value:"1.99",currency_code:"USD"}}}],payment_preferences:{auto_bill_outstanding:true,setup_fee_failure_action:"CANCEL",payment_failure_threshold:1}});
+  let current=plan;
+  if(plan.status!=="ACTIVE"){if(plan.status!=="CREATED"&&plan.status!=="INACTIVE")throw new Error("New Live plan has unexpected status: "+plan.status);await paypalLiveRequest(env,"/v1/billing/plans/"+encodeURIComponent(plan.id)+"/activate","POST",{});current=await paypalLiveRequest(env,"/v1/billing/plans/"+encodeURIComponent(plan.id));}
+  if(current.status!=="ACTIVE")throw new Error("PayPal Live plan activation failed. Status: "+(current.status||"unknown"));
+  await env.CREATOR_SUBSCRIPTIONS.put("paypal:live:plan_id",current.id);
+  return {productId:current.product_id||product.id,planId:current.id,status:current.status,reused:false,mode:"live"};
+}
+async function createPaypalLiveSubscription(request,env,user){
+  const planId=await env.CREATOR_SUBSCRIPTIONS.get("paypal:live:plan_id");
+  if(!planId)throw new Error("The PayPal Live creator plan has not been configured. Ask the site owner to set it up first.");
+  const base="https://rickstreams.site";
+  const sub=await paypalLiveRequest(env,"/v1/billing/subscriptions","POST",{plan_id:planId,custom_id:user.localId,application_context:{brand_name:"RickStreams",locale:"en-US",user_action:"SUBSCRIBE_NOW",shipping_preference:"NO_SHIPPING",return_url:base+"/?creator_payment=return",cancel_url:base+"/?creator_payment=cancel"}});
+  const approve=(sub.links||[]).find(x=>x.rel==="approve")?.href;
+  if(!approve)throw new Error("PayPal Live did not return an approval link.");
+  await env.CREATOR_SUBSCRIPTIONS.put("subscription:"+sub.id,JSON.stringify({uid:user.localId,status:sub.status||"APPROVAL_PENDING",createdAt:Date.now(),mode:"live"}));
+  return {subscriptionId:sub.id,approvalUrl:approve,status:sub.status,mode:"live"};
+}
+async function handlePaypalLiveWebhook(request,env){
+  if(!env.PAYPAL_LIVE_WEBHOOK_ID)throw new Error("PAYPAL_LIVE_WEBHOOK_ID is not configured in Cloudflare yet.");
+  const event=await request.json(),h=request.headers;
+  const verification=await paypalLiveRequest(env,"/v1/notifications/verify-webhook-signature","POST",{auth_algo:h.get("paypal-auth-algo"),cert_url:h.get("paypal-cert-url"),transmission_id:h.get("paypal-transmission-id"),transmission_sig:h.get("paypal-transmission-sig"),transmission_time:h.get("paypal-transmission-time"),webhook_id:env.PAYPAL_LIVE_WEBHOOK_ID,webhook_event:event});
+  if(verification.verification_status!=="SUCCESS")throw new Error("PayPal Live webhook signature verification failed.");
+  const resource=event.resource||{};
+  const subscriptionId=resource.billing_agreement_id||resource.subscription_id||((event.event_type||"").startsWith("BILLING.SUBSCRIPTION.")?resource.id:null);
+  const mapping=subscriptionId?await env.CREATOR_SUBSCRIPTIONS.get("subscription:"+subscriptionId,"json"):null;
+  const uid=resource.custom_id||mapping?.uid;
+  if(!uid)return {received:true,ignored:true};
+  const active=["BILLING.SUBSCRIPTION.ACTIVATED","PAYMENT.SALE.COMPLETED"];
+  const inactive=["BILLING.SUBSCRIPTION.CANCELLED","BILLING.SUBSCRIPTION.SUSPENDED","BILLING.SUBSCRIPTION.EXPIRED","BILLING.SUBSCRIPTION.PAYMENT.FAILED","PAYMENT.SALE.REVERSED","PAYMENT.SALE.REFUNDED"];
+  if(active.includes(event.event_type)){await env.CREATOR_SUBSCRIPTIONS.put("creator:"+uid,JSON.stringify({status:"active",subscriptionId,updatedAt:Date.now(),source:event.event_type,mode:"live"}));if(subscriptionId)await env.CREATOR_SUBSCRIPTIONS.put("subscription:"+subscriptionId,JSON.stringify({uid,status:"active",mode:"live"}));}
+  else if(inactive.includes(event.event_type)){await env.CREATOR_SUBSCRIPTIONS.put("creator:"+uid,JSON.stringify({status:"inactive",subscriptionId,updatedAt:Date.now(),source:event.event_type,mode:"live"}));if(subscriptionId)await env.CREATOR_SUBSCRIPTIONS.put("subscription:"+subscriptionId,JSON.stringify({uid,status:"inactive",mode:"live"}));}
+  return {received:true};
+}
+
 async function activatePaypalPlanSafely(env, planId) {
   const path="/v1/billing/plans/"+encodeURIComponent(planId);
   let current=await paypalRequest(env,path);
@@ -513,17 +568,22 @@ export default {
       return new Response(object.body, { status: 206, headers });
     }
 
+    if (url.pathname === "/payments/paypal/live-webhook" && request.method === "POST") { try { const result=await handlePaypalLiveWebhook(request,env); return reply(result,200,origin); } catch(error) { return reply({error:error.message||"Live webhook processing failed."},400,origin); } }
     if (url.pathname === "/payments/paypal/webhook" && request.method === "POST") { try { const result=await handlePaypalWebhook(request,env); return reply(result,200,origin); } catch(error) { return reply({error:error.message||"Webhook processing failed."},400,origin); } }
 
     if (url.pathname === "/creator/status") { try { const user=await requireUser(request,env); const record=env.CREATOR_SUBSCRIPTIONS?await env.CREATOR_SUBSCRIPTIONS.get("creator:"+user.localId,"json"):null; return reply({status:record?.status||"inactive",creator:record||null},200,origin); } catch(error) { return reply({error:error.message},401,origin); } }
 
-    if (!url.pathname.startsWith("/upload/") && url.pathname !== "/publish" && url.pathname !== "/video/delete" && url.pathname !== "/creator/payment-method" && url.pathname !== "/creator/payout/request" && url.pathname !== "/admin/bitcoin-payouts" && url.pathname !== "/watch/start" && url.pathname !== "/watch/heartbeat" && url.pathname !== "/admin/migrate-existing-accounts" && url.pathname !== "/admin/paypal/setup-plan" && url.pathname !== "/payments/paypal/create-subscription") {
+    if (!url.pathname.startsWith("/upload/") && url.pathname !== "/publish" && url.pathname !== "/video/delete" && url.pathname !== "/creator/payment-method" && url.pathname !== "/creator/payout/request" && url.pathname !== "/admin/bitcoin-payouts" && url.pathname !== "/watch/start" && url.pathname !== "/watch/heartbeat" && url.pathname !== "/admin/migrate-existing-accounts" && url.pathname !== "/admin/paypal/setup-plan" && url.pathname !== "/payments/paypal/create-subscription" && url.pathname !== "/admin/paypal/setup-live-plan" && url.pathname !== "/payments/paypal/create-live-subscription") {
       return reply({ ok: true, service: "RickStreams upload service" }, 200, origin);
     }
 
     try {
       if (url.pathname === "/admin/bitcoin-payouts") { const owner=await requireOwner(request,env); return reply(await manageBitcoinPayouts(request,env,owner),200,origin); }
       if (request.method !== "POST") return reply({ error: "Method not allowed" }, 405, origin);
+
+      if (url.pathname === "/payments/paypal/create-live-subscription") { const user=await requireUser(request,env); const result=await createPaypalLiveSubscription(request,env,user); return reply(result,200,origin); }
+
+      if (url.pathname === "/admin/paypal/setup-live-plan") { await requireOwner(request,env); const result=await setupPaypalLivePlan(env); return reply({ok:true,...result},200,origin); }
 
       if (url.pathname === "/payments/paypal/create-subscription") {
         const user = await requireUser(request, env);
