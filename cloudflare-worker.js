@@ -296,11 +296,11 @@ async function firebaseCompareAndSet(path, value, token, etag) {
     body:JSON.stringify(value)
   });
 }
-async function awardVerifiedView(env, session, viewerUid) {
+async function awardVerifiedView(env, session, viewerUid, sessionId) {
   const {token,projectId}=await serviceAccessToken(env);
   if(projectId!=="streamtv-football-hub") throw new Error("Firebase service account belongs to the wrong project.");
   const day=new Date().toISOString().slice(0,10);
-  const eventId=[session.videoId,day,viewerUid].join("_").replace(/[^A-Za-z0-9_-]/g,"_");
+  const eventId=("watch_"+String(sessionId||"")).replace(/[^A-Za-z0-9_-]/g,"_");
   const earningsPath="streamtv/creatorEarnings/"+session.creatorUid;
   let applied=false;
   for(let attempt=0;attempt<8;attempt++){
@@ -381,7 +381,7 @@ async function heartbeatWatchSession(request,env,user){
   session.lastHeartbeatAt=now;
   session.lastPosition=position;
   if(session.watchedSeconds>=15){
-    const result=await awardVerifiedView(env,session,user.localId);
+    const result=await awardVerifiedView(env,session,user.localId,sessionId);
     session.awarded=true;
     await env.CREATOR_SUBSCRIPTIONS.put(key,JSON.stringify(session),{expirationTtl:300});
     return {verified:true,...result,watchedSeconds:session.watchedSeconds};
