@@ -5,6 +5,19 @@
         ".read": true,
         ".write": "auth != null && auth.token.email === 'derrickmaena@gmail.com'"
       },
+      "creatorProfiles": {
+        "$uid": {
+          ".read": "auth != null && (auth.uid === $uid || auth.token.email === 'derrickmaena@gmail.com')",
+          ".write": "auth != null && (auth.uid === $uid || auth.token.email === 'derrickmaena@gmail.com')",
+          ".validate": "newData.hasChildren(['role','subscriptionStatus','displayName','createdAt']) && (newData.child('role').val() === 'viewer' || newData.child('role').val() === 'creator') && (newData.child('role').val() !== 'creator' || newData.child('subscriptionStatus').val() === 'pending') && (newData.child('role').val() !== 'viewer' || newData.child('subscriptionStatus').val() === 'not_required')"
+        }
+      },
+      "creatorEarnings": {
+        "$uid": {
+          ".read": "auth != null && (auth.uid === $uid || auth.token.email === 'derrickmaena@gmail.com')",
+          ".write": "auth != null && auth.token.email === 'derrickmaena@gmail.com'"
+        }
+      },
       "analytics": {
         "visits": {
           "$uid": {
