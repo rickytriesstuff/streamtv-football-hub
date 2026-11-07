@@ -343,10 +343,21 @@ async function startWatchSession(request,env,user){
   const videoId=String(body.videoId||"");
   if(!/^[A-Za-z0-9_-]{8,32}$/.test(videoId)) throw new Error("Invalid video ID.");
   const {token}=await serviceAccessToken(env);
-  const result=await firebaseRead("streamtv/publicState/videos/"+videoId,token);
+  const videoPath="streamtv/publicState/videos/"+videoId;
+  const result=await firebaseRead(videoPath,token,true);
   const video=result.data;
   if(!video||!video.videoUrl) throw new Error("This video is no longer available.");
   if(video.uploadedBy===user.localId) return {eligible:false,reason:"creator_self_view"};
+  let viewCounted=false;
+  for(let attempt=0;attempt<8;attempt++){
+    const current=await firebaseRead(videoPath,token,true);
+    if(!current.data) throw new Error("This video is no longer available.");
+    const next={...current.data,views:(Number(current.data.views)||0)+1};
+    const write=await firebaseCompareAndSet(videoPath,next,token,current.etag||"null_etag");
+    if(write.ok){viewCounted=true;break;}
+    if(write.status!==412){const detail=await write.text().catch(()=>"");throw new Error("Could not record video view ("+write.status+"): "+detail.slice(0,200));}
+  }
+  if(!viewCounted) throw new Error("Video view counter is busy. Please try again.");
   const sessionId=crypto.randomUUID();
   const session={
     uid:user.localId,videoId,creatorUid:String(video.uploadedBy||""),
