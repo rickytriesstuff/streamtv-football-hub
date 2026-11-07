@@ -43,7 +43,79 @@ async function requireOwner(request, env) {
   return user;
 }
 
-function safeName(name) {
+
+function base64url(bytes) {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/=/g, "").replace(/\\+/g, "-").replace(/\\//g, "_");
+}
+function pemToBytes(pem) {
+  const body = String(pem || "").replace(/-----BEGIN PRIVATE KEY-----|-----END PRIVATE KEY-----|\\s/g, "");
+  const binary = atob(body);
+  return Uint8Array.from(binary, c => c.charCodeAt(0));
+}
+async function serviceAccessToken(env) {
+  if (!env.FIREBASE_SERVICE_ACCOUNT) throw new Error("Cloudflare secret FIREBASE_SERVICE_ACCOUNT is not configured yet.");
+  const account = JSON.parse(env.FIREBASE_SERVICE_ACCOUNT);
+  const now = Math.floor(Date.now() / 1000);
+  const header = base64url(new TextEncoder().encode(JSON.stringify({alg:"RS256",typ:"JWT"})));
+  const claim = base64url(new TextEncoder().encode(JSON.stringify({
+    iss:account.client_email,
+    scope:"https://www.googleapis.com/auth/identitytoolkit https://www.googleapis.com/auth/firebase.database",
+    aud:"https://oauth2.googleapis.com/token",
+    iat:now,
+    exp:now+3600
+  })));
+  const unsigned = header+"."+claim;
+  const key = await crypto.subtle.importKey("pkcs8",pemToBytes(account.private_key),{name:"RSASSA-PKCS1-v1_5",hash:"SHA-256"},false,["sign"]);
+  const signature = await crypto.subtle.sign("RSASSA-PKCS1-v1_5",key,new TextEncoder().encode(unsigned));
+  const assertion = unsigned+"."+base64url(new Uint8Array(signature));
+  const tokenResponse = await fetch("https://oauth2.googleapis.com/token",{
+    method:"POST",
+    headers:{"Content-Type":"application/x-www-form-urlencoded"},
+    body:new URLSearchParams({grant_type:"urn:ietf:params:oauth:grant-type:jwt-bearer",assertion})
+  });
+  const tokenData = await tokenResponse.json();
+  if(!tokenResponse.ok || !tokenData.access_token) throw new Error("Could not obtain Firebase administrative access: "+(tokenData.error_description||tokenData.error||"unknown error"));
+  return {token:tokenData.access_token,projectId:account.project_id};
+}
+async function migrateExistingAccounts(env) {
+  const {token,projectId}=await serviceAccessToken(env);
+  let pageToken="";
+  let migrated=0;
+  const dbUrl="https://"+projectId+"-default-rtdb.firebaseio.com/streamtv/creatorProfiles.json";
+  const existingResponse=await fetch(dbUrl,{headers:{Authorization:"Bearer "+token}});
+  if(!existingResponse.ok) throw new Error("Could not read creator profiles from Realtime Database.");
+  const existing=await existingResponse.json()||{};
+  const updates={};
+  do {
+    const endpoint="https://identitytoolkit.googleapis.com/v1/projects/"+encodeURIComponent(projectId)+"/accounts:batchGet?maxResults=1000"+(pageToken?"&pageToken="+encodeURIComponent(pageToken):"");
+    const response=await fetch(endpoint,{headers:{Authorization:"Bearer "+token}});
+    const data=await response.json();
+    if(!response.ok) throw new Error("Could not list Firebase accounts: "+(data.error?.message||response.status));
+    for(const user of (data.users||[])){
+      const previous=existing[user.localId]||{};
+      updates[user.localId]={
+        ...previous,
+        role:"creator",
+        subscriptionStatus:"grandfathered",
+        creatorAccess:true,
+        displayName:previous.displayName||user.displayName||((user.email||"").split("@")[0])||"Creator",
+        createdAt:previous.createdAt||Date.now(),
+        grandfatheredAt:previous.grandfatheredAt||Date.now(),
+        grandfatheredReason:"account_existed_before_creator_fee"
+      };
+      migrated++;
+    }
+    pageToken=data.nextPageToken||"";
+  } while(pageToken);
+  if(migrated){
+    const write=await fetch(dbUrl,{method:"PATCH",headers:{Authorization:"Bearer "+token,"Content-Type":"application/json"},body:JSON.stringify(updates)});
+    if(!write.ok) throw new Error("Firebase refused to save grandfathered creator profiles.");
+  }
+  return {migrated};
+}
+\nfunction safeName(name) {
   return String(name || "upload.bin").replace(/[^a-zA-Z0-9._-]/g, "_").slice(-100);
 }
 
@@ -105,7 +177,7 @@ export default {
       return new Response(object.body, { status: 206, headers });
     }
 
-    if (!url.pathname.startsWith("/upload/")) {
+    if (!url.pathname.startsWith("/upload/") && url.pathname !== "/admin/migrate-existing-accounts") {
       return reply({ ok: true, service: "RickStreams upload service" }, 200, origin);
     }
 
@@ -113,6 +185,11 @@ export default {
       await requireOwner(request, env);
 
       if (request.method !== "POST") return reply({ error: "Method not allowed" }, 405, origin);
+
+      if (url.pathname === "/admin/migrate-existing-accounts") {
+        const result = await migrateExistingAccounts(env);
+        return reply({ ok:true, migrated:result.migrated, status:"grandfathered" }, 200, origin);
+      }
 
       if (url.pathname === "/upload/init") {
         const body = await request.json();
