@@ -50,7 +50,7 @@ function base64url(bytes) {
   return btoa(binary).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
 }
 function pemToBytes(pem) {
-  const body = String(pem || "").replace(/-----BEGIN PRIVATE KEY-----|-----END PRIVATE KEY-----|\\s/g, "");
+  const body = String(pem || "").replace(/-----BEGIN PRIVATE KEY-----|-----END PRIVATE KEY-----|\s/g, "");
   const binary = atob(body);
   return Uint8Array.from(binary, c => c.charCodeAt(0));
 }
