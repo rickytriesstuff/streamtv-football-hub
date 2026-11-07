@@ -247,17 +247,37 @@ async function deleteCreatorVideo(request,env,user,origin){
   if(thumbKey) await env.RICKSTREAMS_BUCKET.delete(thumbKey);
   return {ok:true,videoId};
 }
+function validBitcoinAddress(value){
+ const a=String(value||"").trim();if(a.length<26||a.length>62)return false;
+ if(/^bc1/i.test(a)){if(a!==a.toLowerCase()&&a!==a.toUpperCase())return false;return /^bc1[ac-hj-np-z02-9]{20,59}$/i.test(a);}
+ return /^[13][a-km-zA-HJ-NP-Z1-9]{25,34}$/.test(a);
+}
+async function creatorCanReceivePayout(env,user){const s=env.CREATOR_SUBSCRIPTIONS?await env.CREATOR_SUBSCRIPTIONS.get("creator:"+user.localId,"json"):null;if(s?.status!=="active"&&(user.email||"").toLowerCase()!==(env.OWNER_EMAIL||"").toLowerCase())throw new Error("An active creator subscription is required for Bitcoin payouts.");}
 async function saveCreatorPaymentMethod(request,env,user){
-  const body=await request.json(),email=String(body.paypalEmail||"").trim().toLowerCase();
-  if(email.length>254||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("Enter a valid PayPal email address.");
-  const status=env.CREATOR_SUBSCRIPTIONS?await env.CREATOR_SUBSCRIPTIONS.get("creator:"+user.localId,"json"):null;
-  if(status?.status!=="active"&&(user.email||"").toLowerCase()!==(env.OWNER_EMAIL||"").toLowerCase()) throw new Error("An active creator subscription is required to add payout details.");
-  const {token,projectId}=await serviceAccessToken(env);
-  if(projectId!=="streamtv-football-hub") throw new Error("Firebase service account belongs to the wrong project.");
-  const path="streamtv/creatorPayoutMethods/"+user.localId;
-  const response=await fetch(firebaseUrl(path,token),{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({paypalEmail:email,updatedAt:Date.now(),status:"provided"})});
-  if(!response.ok) throw new Error("Could not save your PayPal payout details.");
-  return {ok:true,paypalEmail:email};
+ const body=await request.json(),address=String(body.bitcoinAddress||"").trim();if(!validBitcoinAddress(address))throw new Error("Enter a valid Bitcoin mainnet address starting with 1, 3 or bc1.");
+ await creatorCanReceivePayout(env,user);const {token,projectId}=await serviceAccessToken(env);if(projectId!=="streamtv-football-hub")throw new Error("Firebase service account belongs to the wrong project.");
+ const r=await fetch(firebaseUrl("streamtv/creatorPayoutMethods/"+user.localId,token),{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({bitcoinAddress:address,currency:"BTC",network:"Bitcoin mainnet",updatedAt:Date.now(),status:"provided"})});
+ if(!r.ok)throw new Error("Could not save your Bitcoin wallet address.");return {ok:true,bitcoinAddress:address,currency:"BTC"};
+}
+async function requestBitcoinPayout(request,env,user){
+ await creatorCanReceivePayout(env,user);const {token,projectId}=await serviceAccessToken(env);if(projectId!=="streamtv-football-hub")throw new Error("Firebase service account belongs to the wrong project.");
+ const method=await firebaseRead("streamtv/creatorPayoutMethods/"+user.localId,token);if(!method.data?.bitcoinAddress||!validBitcoinAddress(method.data.bitcoinAddress))throw new Error("Save a valid Bitcoin wallet address before requesting a payout.");
+ const requestPath="streamtv/creatorPayoutRequests/"+user.localId,existing=await firebaseRead(requestPath,token,true);if(existing.data?.status==="pending")throw new Error("You already have a pending payout request.");
+ const earningsPath="streamtv/creatorEarnings/"+user.localId;let reserved=false,amount=0;
+ for(let i=0;i<8;i++){const c=await firebaseRead(earningsPath,token,true),d=c.data||{};const available=Math.round((Number(d.availableUsd)||0)*100)/100;if(available<25)throw new Error("You need at least $25.00 in available earnings.");amount=available;const next={...d,availableUsd:0,pendingUsd:Math.round(((Number(d.pendingUsd)||0)+amount)*100)/100};const w=await firebaseCompareAndSet(earningsPath,next,token,c.etag||"null_etag");if(w.ok){reserved=true;break;}if(w.status!==412)throw new Error("Could not reserve your payout balance.");}
+ if(!reserved)throw new Error("Your earnings are being updated. Please try again.");
+ const record={id:"btc_"+crypto.randomUUID().replace(/-/g,""),uid:user.localId,bitcoinAddress:method.data.bitcoinAddress,currency:"BTC",requestedUsd:amount,status:"pending",requestedAt:Date.now(),updatedAt:Date.now()};
+ const saved=await fetch(firebaseUrl(requestPath,token),{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(record)});
+ if(!saved.ok){for(let i=0;i<5;i++){const c=await firebaseRead(earningsPath,token,true),d=c.data||{},n={...d,availableUsd:Math.round(((Number(d.availableUsd)||0)+amount)*100)/100,pendingUsd:Math.max(0,Math.round(((Number(d.pendingUsd)||0)-amount)*100)/100)},u=await firebaseCompareAndSet(earningsPath,n,token,c.etag||"null_etag");if(u.ok)break;if(u.status!==412)break;}throw new Error("Could not save the request. Your balance restoration was attempted.");}
+ return {ok:true,request:record,message:"Payout request submitted. It will be reviewed and paid manually in Bitcoin."};
+}
+async function manageBitcoinPayouts(request,env,owner){
+ const {token,projectId}=await serviceAccessToken(env);if(projectId!=="streamtv-football-hub")throw new Error("Firebase service account belongs to the wrong project.");const body=await request.json(),root="streamtv/creatorPayoutRequests";
+ if(body.action==="list"){const all=await firebaseRead(root,token),rows=[];for(const [uid,p] of Object.entries(all.data||{})){if(!p||typeof p!=="object")continue;const [profile,method]=await Promise.all([firebaseRead("streamtv/creatorProfiles/"+uid,token),firebaseRead("streamtv/creatorPayoutMethods/"+uid,token)]);rows.push({...p,uid,creatorName:profile.data?.displayName||"Creator",bitcoinAddress:method.data?.bitcoinAddress||p.bitcoinAddress||""});}return {requests:rows.sort((a,b)=>(b.requestedAt||0)-(a.requestedAt||0))};}
+ if(body.action!=="update")throw new Error("Unknown payout admin action.");const uid=String(body.uid||""),status=String(body.status||""),txid=String(body.txid||"").trim(),btcAmount=String(body.btcAmount||"").trim();if(!/^[A-Za-z0-9_-]{1,128}$/.test(uid)||!["paid","rejected"].includes(status))throw new Error("Invalid payout update.");if(status==="paid"&&(!/^[0-9a-fA-F]{64}$/.test(txid)||!/^\d+(\.\d{1,8})?$/.test(btcAmount)||Number(btcAmount)<=0))throw new Error("Enter the BTC amount sent and a 64-character transaction ID.");
+ const path=root+"/"+uid,current=await firebaseRead(path,token,true),p=current.data;if(!p||p.status!=="pending")throw new Error("This payout request is no longer pending.");const ep="streamtv/creatorEarnings/"+uid;let updatedBalance=false;
+ for(let i=0;i<8;i++){const c=await firebaseRead(ep,token,true),d=c.data||{},pending=Math.max(0,Math.round(((Number(d.pendingUsd)||0)-Number(p.requestedUsd||0))*100)/100),n=status==="paid"?{...d,pendingUsd:pending,paidOutUsd:Math.round(((Number(d.paidOutUsd)||0)+Number(p.requestedUsd||0))*100)/100}:{...d,pendingUsd:pending,availableUsd:Math.round(((Number(d.availableUsd)||0)+Number(p.requestedUsd||0))*100)/100},w=await firebaseCompareAndSet(ep,n,token,c.etag||"null_etag");if(w.ok){updatedBalance=true;break;}if(w.status!==412)throw new Error("Could not update creator earnings.");}
+ if(!updatedBalance)throw new Error("Creator earnings are busy. Refresh and retry.");const next={...p,status,updatedAt:Date.now(),...(status==="paid"?{txid,btcAmount,paidAt:Date.now(),paidBy:owner.localId}:{rejectedAt:Date.now(),rejectedBy:owner.localId})},save=await firebaseCompareAndSet(path,next,token,current.etag||"null_etag");if(!save.ok)throw new Error("Payout record changed during update. Refresh before retrying.");return {ok:true,payout:next};
 }
 
 async function publishVideoToFirebase(request, env, user, origin) {
@@ -497,11 +517,12 @@ export default {
 
     if (url.pathname === "/creator/status") { try { const user=await requireUser(request,env); const record=env.CREATOR_SUBSCRIPTIONS?await env.CREATOR_SUBSCRIPTIONS.get("creator:"+user.localId,"json"):null; return reply({status:record?.status||"inactive",creator:record||null},200,origin); } catch(error) { return reply({error:error.message},401,origin); } }
 
-    if (!url.pathname.startsWith("/upload/") && url.pathname !== "/publish" && url.pathname !== "/video/delete" && url.pathname !== "/creator/payment-method" && url.pathname !== "/watch/start" && url.pathname !== "/watch/heartbeat" && url.pathname !== "/admin/migrate-existing-accounts" && url.pathname !== "/admin/paypal/setup-plan" && url.pathname !== "/payments/paypal/create-subscription") {
+    if (!url.pathname.startsWith("/upload/") && url.pathname !== "/publish" && url.pathname !== "/video/delete" && url.pathname !== "/creator/payment-method" && url.pathname !== "/creator/payout/request" && url.pathname !== "/admin/bitcoin-payouts" && url.pathname !== "/watch/start" && url.pathname !== "/watch/heartbeat" && url.pathname !== "/admin/migrate-existing-accounts" && url.pathname !== "/admin/paypal/setup-plan" && url.pathname !== "/payments/paypal/create-subscription") {
       return reply({ ok: true, service: "RickStreams upload service" }, 200, origin);
     }
 
     try {
+      if (url.pathname === "/admin/bitcoin-payouts") { const owner=await requireOwner(request,env); return reply(await manageBitcoinPayouts(request,env,owner),200,origin); }
       if (request.method !== "POST") return reply({ error: "Method not allowed" }, 405, origin);
 
       if (url.pathname === "/payments/paypal/create-subscription") {
@@ -529,6 +550,7 @@ export default {
 
       if (url.pathname === "/video/delete") { const user=await requireUser(request,env); return reply(await deleteCreatorVideo(request,env,user,url.origin),200,origin); }
       if (url.pathname === "/creator/payment-method") { const user=await requireUser(request,env); return reply(await saveCreatorPaymentMethod(request,env,user),200,origin); }
+      if (url.pathname === "/creator/payout/request") { const user=await requireUser(request,env); return reply(await requestBitcoinPayout(request,env,user),200,origin); }
       if (url.pathname === "/watch/start") { const user=await requireUser(request,env); return reply(await startWatchSession(request,env,user),200,origin); }
       if (url.pathname === "/watch/heartbeat") { const user=await requireUser(request,env); return reply(await heartbeatWatchSession(request,env,user),200,origin); }
 
