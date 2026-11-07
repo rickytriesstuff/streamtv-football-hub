@@ -436,7 +436,7 @@ async function awardVerifiedView(env, session, viewerUid, sessionId) {
   const {token,projectId}=await serviceAccessToken(env);
   if(projectId!=="streamtv-football-hub") throw new Error("Firebase service account belongs to the wrong project.");
   const day=new Date().toISOString().slice(0,10);
-  const eventId=("watch_"+String(sessionId||"")).replace(/[^A-Za-z0-9_-]/g,"_");
+  const eventId=("eligible_"+String(viewerUid)+"_"+String(session.videoId)+"_"+day).replace(/[^A-Za-z0-9_-]/g,"_");
   const earningsPath="streamtv/creatorEarnings/"+session.creatorUid;
   let applied=false;
   for(let attempt=0;attempt<8;attempt++){
