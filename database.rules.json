@@ -39,6 +39,20 @@
             ".write": "auth != null && auth.uid === $uid"
           }
         }
+      },
+      "following": {
+        "$uid": {
+          ".read": "auth != null && auth.uid === $uid",
+          ".write": "auth != null && auth.uid === $uid"
+        }
+      },
+      "videoTapViews": {
+        ".read": true,
+        "$videoId": {
+          "$uid": {
+            ".write": "auth != null && auth.uid === $uid"
+          }
+        }
       }
     }
   }
