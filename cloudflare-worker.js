@@ -384,9 +384,10 @@ async function publishVideoToFirebase(request, env, user, origin) {
   }
   const verify = await firebaseRead(dbPath, token);
   if (!verify.data || verify.data.uploadedBy !== user.localId) throw new Error("Firebase accepted the publish request but the video record could not be verified.");
+}
 
-function firebaseUrl(path) {
-  return "https://streamtv-football-hub-default-rtdb.firebaseio.com/" + path + ".json";
+function firebaseUrl(path, token) {
+  return "https://streamtv-football-hub-default-rtdb.firebaseio.com/" + path + ".json" + (token ? "?access_token=" + encodeURIComponent(token) : "");
 }
 async function firebaseRead(path, token, withEtag=false) {
   const headers = {"Authorization":"Bearer "+token};
