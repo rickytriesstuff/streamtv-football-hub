@@ -1,8 +1,8 @@
 {
   "id": "/",
-  "name": "Douyinflix",
-  "short_name": "Douyinflix",
-  "description": "Movies, short dramas, series, anime and live TV.",
+  "name": "RickStreams",
+  "short_name": "RickStreams",
+  "description": "Discover and share short videos.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
