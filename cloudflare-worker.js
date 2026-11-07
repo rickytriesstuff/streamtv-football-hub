@@ -70,7 +70,7 @@ async function serviceAccessToken(env) {
   const header = base64url(new TextEncoder().encode(JSON.stringify({alg:"RS256",typ:"JWT"})));
   const claim = base64url(new TextEncoder().encode(JSON.stringify({
     iss:account.client_email,
-    scope:"https://www.googleapis.com/auth/identitytoolkit https://www.googleapis.com/auth/firebase.database",
+    scope:"https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/firebase.database https://www.googleapis.com/auth/identitytoolkit",
     aud:"https://oauth2.googleapis.com/token",
     iat:now,
     exp:now+3600
