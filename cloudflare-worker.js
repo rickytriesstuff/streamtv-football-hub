@@ -266,10 +266,10 @@ async function publishVideoToFirebase(request, env, user, origin) {
     earningsUsd: 0, createdAt: Date.now(), uploadedBy: user.localId,
     viewCountType: "verified_pending"
   };
-  const dbUrl = "https://streamtv-football-hub-default-rtdb.firebaseio.com/streamtv/publicState/videos/" + encodeURIComponent(videoId) + ".json";
+  const dbUrl = "https://streamtv-football-hub-default-rtdb.firebaseio.com/streamtv/publicState/videos/" + encodeURIComponent(videoId) + ".json?access_token=" + encodeURIComponent(token);
   const write = await fetch(dbUrl, {
     method: "PUT",
-    headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(record)
   });
   if (!write.ok) {
