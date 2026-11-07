@@ -229,6 +229,56 @@ async function handlePaypalWebhook(request,env){
   return {received:true};
 }
 
+
+async function publishVideoToFirebase(request, env, user, origin) {
+  const body = await request.json();
+  const title = String(body.title || "").trim().slice(0, 100);
+  const description = String(body.description || "").trim().slice(0, 300);
+  const orientation = body.orientation === "horizontal" ? "horizontal" : "vertical";
+  const durationSeconds = Number(body.durationSeconds);
+  if (!title) throw new Error("Please add a video title.");
+  if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) throw new Error("Invalid video duration.");
+  if (orientation === "vertical" && durationSeconds > 120) throw new Error("Vertical videos cannot exceed 2 minutes.");
+  if (orientation === "horizontal" && durationSeconds > 180) throw new Error("Horizontal videos cannot exceed 3 minutes.");
+  const videoUrl = new URL(String(body.videoUrl || ""));
+  if (videoUrl.origin !== origin || !videoUrl.pathname.startsWith("/media/")) throw new Error("Video must be uploaded to RickStreams storage first.");
+  const videoKey = decodeURIComponent(videoUrl.pathname.slice(7));
+  if (!videoKey.startsWith("rickstreams/videos/") || videoKey.includes("..")) throw new Error("Invalid video storage key.");
+  const videoObject = await env.RICKSTREAMS_BUCKET.head(videoKey);
+  if (!videoObject || !(videoObject.httpMetadata?.contentType || "").startsWith("video/")) throw new Error("Uploaded video was not found in storage.");
+  let thumbnailUrl = "";
+  if (body.thumbnailUrl) {
+    const thumb = new URL(String(body.thumbnailUrl));
+    if (thumb.origin !== origin || !thumb.pathname.startsWith("/media/")) throw new Error("Thumbnail must be uploaded to RickStreams storage.");
+    const thumbKey = decodeURIComponent(thumb.pathname.slice(7));
+    if (!thumbKey.startsWith("rickstreams/thumbnails/") || thumbKey.includes("..")) throw new Error("Invalid thumbnail storage key.");
+    const thumbObject = await env.RICKSTREAMS_BUCKET.head(thumbKey);
+    if (!thumbObject || !(thumbObject.httpMetadata?.contentType || "").startsWith("image/")) throw new Error("Uploaded thumbnail was not found in storage.");
+    thumbnailUrl = thumb.href;
+  }
+  const videoId = String(body.videoId || "");
+  if (!/^[A-Za-z0-9_-]{8,32}$/.test(videoId)) throw new Error("Invalid video record ID.");
+  const { token, projectId } = await serviceAccessToken(env);
+  if (projectId !== "streamtv-football-hub") throw new Error("Firebase service account belongs to the wrong project.");
+  const record = {
+    title, description, orientation, durationSeconds: Math.round(durationSeconds),
+    videoUrl: videoUrl.href, thumbnailUrl, views: 0, eligibleViews: 0,
+    earningsUsd: 0, createdAt: Date.now(), uploadedBy: user.localId,
+    viewCountType: "verified_pending"
+  };
+  const dbUrl = "https://streamtv-football-hub-default-rtdb.firebaseio.com/streamtv/publicState/videos/" + encodeURIComponent(videoId) + ".json";
+  const write = await fetch(dbUrl, {
+    method: "PUT",
+    headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+    body: JSON.stringify(record)
+  });
+  if (!write.ok) {
+    const detail = await write.text().catch(() => "");
+    throw new Error("Firebase publishing failed (" + write.status + "): " + detail.slice(0, 350));
+  }
+  return { ok: true, id: videoId, record };
+}
+
 function safeName(name) {
   return String(name || "upload.bin").replace(/[^a-zA-Z0-9._-]/g, "_").slice(-100);
 }
@@ -295,7 +345,7 @@ export default {
 
     if (url.pathname === "/creator/status") { try { const user=await requireUser(request,env); const record=env.CREATOR_SUBSCRIPTIONS?await env.CREATOR_SUBSCRIPTIONS.get("creator:"+user.localId,"json"):null; return reply({status:record?.status||"inactive",creator:record||null},200,origin); } catch(error) { return reply({error:error.message},401,origin); } }
 
-    if (!url.pathname.startsWith("/upload/") && url.pathname !== "/admin/migrate-existing-accounts" && url.pathname !== "/admin/paypal/setup-plan" && url.pathname !== "/payments/paypal/create-subscription") {
+    if (!url.pathname.startsWith("/upload/") && url.pathname !== "/publish" && url.pathname !== "/admin/migrate-existing-accounts" && url.pathname !== "/admin/paypal/setup-plan" && url.pathname !== "/payments/paypal/create-subscription") {
       return reply({ ok: true, service: "RickStreams upload service" }, 200, origin);
     }
 
@@ -317,7 +367,13 @@ export default {
         return reply({ ok:true, migrated:result.migrated, status:"grandfathered" }, 200, origin);
       }
 
-      if (url.pathname.startsWith("/upload/")) await requireCreatorOrOwner(request, env);
+      if (url.pathname.startsWith("/upload/") || url.pathname === "/publish") await requireCreatorOrOwner(request, env);
+
+      if (url.pathname === "/publish") {
+        const user = await requireUser(request, env);
+        const result = await publishVideoToFirebase(request, env, user, url.origin);
+        return reply(result, 200, origin);
+      }
 
       if (url.pathname === "/upload/init") {
         const body = await request.json();
