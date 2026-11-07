@@ -79,6 +79,7 @@ async function serviceAccessToken(env) {
   if(!tokenResponse.ok || !tokenData.access_token) throw new Error("Could not obtain Firebase administrative access: "+(tokenData.error_description||tokenData.error||"unknown error"));
   return {token:tokenData.access_token,projectId:account.project_id};
 }
+const CREATOR_GRANDFATHER_CUTOFF = 1794061680000; // Accounts created on or before the user's approval time only.
 async function migrateExistingAccounts(env) {
   const {token,projectId}=await serviceAccessToken(env);
   let pageToken="";
@@ -94,6 +95,8 @@ async function migrateExistingAccounts(env) {
     const data=await response.json();
     if(!response.ok) throw new Error("Could not list Firebase accounts: "+(data.error?.message||response.status));
     for(const user of (data.users||[])){
+      const accountCreatedAt = Number(user.createdAt || user.metadata?.createdAt || 0);
+      if (!accountCreatedAt || accountCreatedAt > CREATOR_GRANDFATHER_CUTOFF) continue;
       const previous=existing[user.localId]||{};
       updates[user.localId]={
         ...previous,
