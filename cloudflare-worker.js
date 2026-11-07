@@ -118,7 +118,78 @@ async function migrateExistingAccounts(env) {
   }
   return {migrated};
 }
-\nfunction safeName(name) {
+\n
+async function requireUser(request, env) {
+  const token=(request.headers.get("Authorization")||"").replace(/^Bearer\\s+/i,"");
+  if(!token) throw new Error("Please sign in first.");
+  const response=await fetch("https://identitytoolkit.googleapis.com/v1/accounts:lookup?key="+encodeURIComponent(env.FIREBASE_API_KEY),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({idToken:token})});
+  if(!response.ok) throw new Error("Your sign-in session could not be verified. Please log in again.");
+  const data=await response.json(), user=data.users&&data.users[0];
+  if(!user) throw new Error("Account not found.");
+  return user;
+}
+function paypalBase(env){return env.PAYPAL_MODE==="live"?"https://api-m.paypal.com":"https://api-m.sandbox.paypal.com";}
+async function paypalToken(env){
+  if(!env.PAYPAL_CLIENT_ID||!env.PAYPAL_CLIENT_SECRET) throw new Error("PayPal credentials are missing from Cloudflare.");
+  const auth=btoa(env.PAYPAL_CLIENT_ID+":"+env.PAYPAL_CLIENT_SECRET);
+  const r=await fetch(paypalBase(env)+"/v1/oauth2/token",{method:"POST",headers:{Authorization:"Basic "+auth,"Content-Type":"application/x-www-form-urlencoded"},body:"grant_type=client_credentials"});
+  const d=await r.json(); if(!r.ok||!d.access_token) throw new Error("PayPal authentication failed: "+(d.error_description||d.error||r.status));
+  return d.access_token;
+}
+async function paypalRequest(env,path,method="GET",body=null){
+  const token=await paypalToken(env);
+  const r=await fetch(paypalBase(env)+path,{method,headers:{Authorization:"Bearer "+token,"Content-Type":"application/json",Prefer:"return=representation"},...(body?{body:JSON.stringify(body)}:{})});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error("PayPal API error: "+(d.message||d.details?.[0]?.description||r.status));
+  return d;
+}
+async function setupPaypalPlan(env){
+  if(!env.CREATOR_SUBSCRIPTIONS) throw new Error("Cloudflare KV binding CREATOR_SUBSCRIPTIONS is missing.");
+  const product=await paypalRequest(env,"/v1/catalogs/products","POST",{name:"RickStreams Creator Membership",description:"Monthly creator membership for RickStreams",type:"SERVICE",category:"SOFTWARE"});
+  const plan=await paypalRequest(env,"/v1/billing/plans","POST",{product_id:product.id,name:"RickStreams Creator Monthly",description:"RickStreams creator membership, billed monthly",status:"ACTIVE",billing_cycles:[{frequency:{interval_unit:"MONTH",interval_count:1},tenure_type:"REGULAR",sequence:1,total_cycles:0,pricing_scheme:{fixed_price:{value:"1.99",currency_code:"USD"}}}],payment_preferences:{auto_bill_outstanding:true,setup_fee_failure_action:"CANCEL",payment_failure_threshold:1}});
+  await env.CREATOR_SUBSCRIPTIONS.put("paypal:plan_id",plan.id);
+  return {productId:product.id,planId:plan.id};
+}
+async function createPaypalSubscription(request,env,user){
+  if(!env.CREATOR_SUBSCRIPTIONS) throw new Error("Cloudflare KV binding CREATOR_SUBSCRIPTIONS is missing.");
+  const planId=await env.CREATOR_SUBSCRIPTIONS.get("paypal:plan_id");
+  if(!planId) throw new Error("The PayPal creator plan has not been configured by the site owner yet.");
+  const base="https://rickstreams.site";
+  const sub=await paypalRequest(env,"/v1/billing/subscriptions","POST",{plan_id:planId,custom_id:user.localId,application_context:{brand_name:"RickStreams",locale:"en-US",user_action:"SUBSCRIBE_NOW",shipping_preference:"NO_SHIPPING",return_url:base+"/?creator_payment=return",cancel_url:base+"/?creator_payment=cancel"}});
+  const approve=(sub.links||[]).find(x=>x.rel==="approve")?.href;
+  if(!approve) throw new Error("PayPal did not return an approval link.");
+  await env.CREATOR_SUBSCRIPTIONS.put("subscription:"+sub.id,JSON.stringify({uid:user.localId,status:sub.status||"APPROVAL_PENDING",createdAt:Date.now()}));
+  return {subscriptionId:sub.id,approvalUrl:approve,status:sub.status};
+}
+async function handlePaypalWebhook(request,env){
+  if(!env.PAYPAL_WEBHOOK_ID) throw new Error("PAYPAL_WEBHOOK_ID is not configured.");
+  if(!env.CREATOR_SUBSCRIPTIONS) throw new Error("Cloudflare KV binding CREATOR_SUBSCRIPTIONS is missing.");
+  const event=await request.json();
+  const h=request.headers;
+  const verification=await paypalRequest(env,"/v1/notifications/verify-webhook-signature","POST",{
+    auth_algo:h.get("paypal-auth-algo"),cert_url:h.get("paypal-cert-url"),
+    transmission_id:h.get("paypal-transmission-id"),transmission_sig:h.get("paypal-transmission-sig"),
+    transmission_time:h.get("paypal-transmission-time"),webhook_id:env.PAYPAL_WEBHOOK_ID,webhook_event:event
+  });
+  if(verification.verification_status!=="SUCCESS") throw new Error("PayPal webhook signature verification failed.");
+  const resource=event.resource||{};
+  const subscriptionId=resource.id||resource.billing_agreement_id||resource.subscription_id;
+  let mapping=subscriptionId?await env.CREATOR_SUBSCRIPTIONS.get("subscription:"+subscriptionId,"json"):null;
+  const uid=resource.custom_id||mapping?.uid;
+  if(!uid) return {received:true,ignored:true};
+  const activeEvents=["BILLING.SUBSCRIPTION.ACTIVATED","PAYMENT.SALE.COMPLETED"];
+  const inactiveEvents=["BILLING.SUBSCRIPTION.CANCELLED","BILLING.SUBSCRIPTION.SUSPENDED","BILLING.SUBSCRIPTION.EXPIRED","BILLING.SUBSCRIPTION.PAYMENT.FAILED","PAYMENT.SALE.REVERSED","PAYMENT.SALE.REFUNDED"];
+  if(activeEvents.includes(event.event_type)){
+    await env.CREATOR_SUBSCRIPTIONS.put("creator:"+uid,JSON.stringify({status:"active",subscriptionId,updatedAt:Date.now(),source:event.event_type}));
+    if(subscriptionId) await env.CREATOR_SUBSCRIPTIONS.put("subscription:"+subscriptionId,JSON.stringify({uid,status:"active"}));
+  }else if(inactiveEvents.includes(event.event_type)){
+    await env.CREATOR_SUBSCRIPTIONS.put("creator:"+uid,JSON.stringify({status:"inactive",subscriptionId,updatedAt:Date.now(),source:event.event_type}));
+    if(subscriptionId) await env.CREATOR_SUBSCRIPTIONS.put("subscription:"+subscriptionId,JSON.stringify({uid,status:"inactive"}));
+  }
+  return {received:true};
+}
+
+function safeName(name) {
   return String(name || "upload.bin").replace(/[^a-zA-Z0-9._-]/g, "_").slice(-100);
 }
 
@@ -180,7 +251,7 @@ export default {
       return new Response(object.body, { status: 206, headers });
     }
 
-    if (!url.pathname.startsWith("/upload/") && url.pathname !== "/admin/migrate-existing-accounts") {
+    if (url.pathname === "/payments/paypal/webhook" && request.method === "POST") { try { const result=await handlePaypalWebhook(request,env); return reply(result,200,origin); } catch(error) { return reply({error:error.message||"Webhook processing failed."},400,origin); } }\n\n    if (url.pathname === "/creator/status") { try { const user=await requireUser(request,env); const record=env.CREATOR_SUBSCRIPTIONS?await env.CREATOR_SUBSCRIPTIONS.get("creator:"+user.localId,"json"):null; return reply({status:record?.status||"inactive",creator:record||null},200,origin); } catch(error) { return reply({error:error.message},401,origin); } }\n\n    if (!url.pathname.startsWith("/upload/") && url.pathname !== "/admin/migrate-existing-accounts" && url.pathname !== "/admin/paypal/setup-plan" && url.pathname !== "/payments/paypal/create-subscription") {
       return reply({ ok: true, service: "RickStreams upload service" }, 200, origin);
     }
 
@@ -189,7 +260,7 @@ export default {
 
       if (request.method !== "POST") return reply({ error: "Method not allowed" }, 405, origin);
 
-      if (url.pathname === "/admin/migrate-existing-accounts") {
+      if (url.pathname === "/admin/paypal/setup-plan") { const result=await setupPaypalPlan(env); return reply({ok:true,...result},200,origin); }\n\n      if (url.pathname === "/admin/migrate-existing-accounts") {
         const result = await migrateExistingAccounts(env);
         return reply({ ok:true, migrated:result.migrated, status:"grandfathered" }, 200, origin);
       }
