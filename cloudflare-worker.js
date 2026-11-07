@@ -279,6 +279,117 @@ async function publishVideoToFirebase(request, env, user, origin) {
   return { ok: true, id: videoId, record };
 }
 
+
+function firebaseUrl(path, token) {
+  return "https://streamtv-football-hub-default-rtdb.firebaseio.com/" + path + ".json?access_token=" + encodeURIComponent(token);
+}
+async function firebaseRead(path, token, withEtag=false) {
+  const response = await fetch(firebaseUrl(path, token), {headers: withEtag ? {"X-Firebase-ETag":"true"} : {}});
+  const raw = await response.text();
+  if (!response.ok) throw new Error("Firebase read failed ("+response.status+"): "+raw.slice(0,250));
+  return {data:raw ? JSON.parse(raw) : null, etag:response.headers.get("ETag")};
+}
+async function firebaseCompareAndSet(path, value, token, etag) {
+  return fetch(firebaseUrl(path, token), {
+    method:"PUT",
+    headers:{"Content-Type":"application/json","If-Match":etag},
+    body:JSON.stringify(value)
+  });
+}
+async function awardVerifiedView(env, session, viewerUid) {
+  const {token,projectId}=await serviceAccessToken(env);
+  if(projectId!=="streamtv-football-hub") throw new Error("Firebase service account belongs to the wrong project.");
+  const day=new Date().toISOString().slice(0,10);
+  const eventId=[session.videoId,day,viewerUid].join("_").replace(/[^A-Za-z0-9_-]/g,"_");
+  const earningsPath="streamtv/creatorEarnings/"+session.creatorUid;
+  let applied=false;
+  for(let attempt=0;attempt<8;attempt++){
+    const current=await firebaseRead(earningsPath,token,true);
+    const data=current.data&&typeof current.data==="object"?current.data:{};
+    const events=data.verifiedEvents&&typeof data.verifiedEvents==="object"?data.verifiedEvents:{};
+    if(events[eventId]) return {awarded:false,reason:"already_counted"};
+    const earnedMicros=Math.round((Number(data.earnedUsd)||0)*1000000)+450;
+    const availableMicros=Math.round((Number(data.availableUsd)||0)*1000000)+450;
+    const next={
+      ...data,
+      eligibleViews:(Number(data.eligibleViews)||0)+1,
+      earnedUsd:earnedMicros/1000000,
+      availableUsd:availableMicros/1000000,
+      verifiedEvents:{...events,[eventId]:{videoId:session.videoId,viewerUid,day,earnedMicros:450,at:Date.now()}}
+    };
+    const write=await firebaseCompareAndSet(earningsPath,next,token,current.etag||"null_etag");
+    if(write.ok){applied=true;break;}
+    if(write.status!==412){const detail=await write.text().catch(()=>"");throw new Error("Could not update creator earnings ("+write.status+"): "+detail.slice(0,250));}
+  }
+  if(!applied) throw new Error("Creator earnings are busy. Please retry after a moment.");
+  const videoPath="streamtv/publicState/videos/"+session.videoId;
+  for(let attempt=0;attempt<5;attempt++){
+    const current=await firebaseRead(videoPath,token,true);
+    if(!current.data) break;
+    const next={...current.data,eligibleViews:(Number(current.data.eligibleViews)||0)+1};
+    const write=await firebaseCompareAndSet(videoPath,next,token,current.etag||"null_etag");
+    if(write.ok) break;
+    if(write.status!==412) break;
+  }
+  const analyticsPath="streamtv/analytics/videoViews/"+viewerUid+"/"+session.videoId+"/"+day;
+  const analytics=await firebaseRead(analyticsPath,token,true);
+  if(!analytics.data){
+    await firebaseCompareAndSet(analyticsPath,{videoId:session.videoId,watchedSeconds:15,at:Date.now(),type:"15_second_playback_verified",verificationStatus:"verified"},token,analytics.etag||"null_etag");
+  }
+  return {awarded:true,eligibleViewsIncremented:true,rateUsdPerThousand:0.45,earnedUsd:0.00045};
+}
+async function startWatchSession(request,env,user){
+  const body=await request.json();
+  const videoId=String(body.videoId||"");
+  if(!/^[A-Za-z0-9_-]{8,32}$/.test(videoId)) throw new Error("Invalid video ID.");
+  const {token}=await serviceAccessToken(env);
+  const result=await firebaseRead("streamtv/publicState/videos/"+videoId,token);
+  const video=result.data;
+  if(!video||!video.videoUrl) throw new Error("This video is no longer available.");
+  if(video.uploadedBy===user.localId) return {eligible:false,reason:"creator_self_view"};
+  const sessionId=crypto.randomUUID();
+  const session={
+    uid:user.localId,videoId,creatorUid:String(video.uploadedBy||""),
+    startedAt:Date.now(),lastHeartbeatAt:Date.now(),lastPosition:Number(body.currentTime)||0,
+    watchedSeconds:0,awarded:false
+  };
+  if(!session.creatorUid) throw new Error("This video has no creator account.");
+  await env.CREATOR_SUBSCRIPTIONS.put("watch:"+sessionId,JSON.stringify(session),{expirationTtl:300});
+  return {sessionId,eligible:true,requiredSeconds:15};
+}
+async function heartbeatWatchSession(request,env,user){
+  const body=await request.json();
+  const sessionId=String(body.sessionId||"");
+  const key="watch:"+sessionId;
+  if(!/^[0-9a-f-]{36}$/i.test(sessionId)) throw new Error("Invalid watch session.");
+  const session=await env.CREATOR_SUBSCRIPTIONS.get(key,"json");
+  if(!session||session.uid!==user.localId) throw new Error("Watch session expired. Reopen the video to start again.");
+  if(session.awarded) return {verified:true,awarded:false,reason:"already_processed"};
+  const now=Date.now();
+  const position=Number(body.currentTime);
+  if(body.playing!==true||!Number.isFinite(position)||position<0){
+    session.lastHeartbeatAt=now;
+    session.lastPosition=Number.isFinite(position)?position:session.lastPosition;
+    await env.CREATOR_SUBSCRIPTIONS.put(key,JSON.stringify(session),{expirationTtl:300});
+    return {verified:false,watchedSeconds:session.watchedSeconds};
+  }
+  const elapsed=(now-session.lastHeartbeatAt)/1000;
+  const delta=position-session.lastPosition;
+  if(elapsed>=2.5&&elapsed<=12&&delta>=Math.max(0.5,elapsed*0.35)&&delta<=elapsed*1.8+1){
+    session.watchedSeconds+=Math.min(elapsed,delta);
+  }
+  session.lastHeartbeatAt=now;
+  session.lastPosition=position;
+  if(session.watchedSeconds>=15){
+    const result=await awardVerifiedView(env,session,user.localId);
+    session.awarded=true;
+    await env.CREATOR_SUBSCRIPTIONS.put(key,JSON.stringify(session),{expirationTtl:300});
+    return {verified:true,...result,watchedSeconds:session.watchedSeconds};
+  }
+  await env.CREATOR_SUBSCRIPTIONS.put(key,JSON.stringify(session),{expirationTtl:300});
+  return {verified:false,watchedSeconds:Math.floor(session.watchedSeconds),remainingSeconds:Math.max(0,Math.ceil(15-session.watchedSeconds))};
+}
+
 function safeName(name) {
   return String(name || "upload.bin").replace(/[^a-zA-Z0-9._-]/g, "_").slice(-100);
 }
@@ -345,7 +456,7 @@ export default {
 
     if (url.pathname === "/creator/status") { try { const user=await requireUser(request,env); const record=env.CREATOR_SUBSCRIPTIONS?await env.CREATOR_SUBSCRIPTIONS.get("creator:"+user.localId,"json"):null; return reply({status:record?.status||"inactive",creator:record||null},200,origin); } catch(error) { return reply({error:error.message},401,origin); } }
 
-    if (!url.pathname.startsWith("/upload/") && url.pathname !== "/publish" && url.pathname !== "/admin/migrate-existing-accounts" && url.pathname !== "/admin/paypal/setup-plan" && url.pathname !== "/payments/paypal/create-subscription") {
+    if (!url.pathname.startsWith("/upload/") && url.pathname !== "/publish" && url.pathname !== "/watch/start" && url.pathname !== "/watch/heartbeat" && url.pathname !== "/admin/migrate-existing-accounts" && url.pathname !== "/admin/paypal/setup-plan" && url.pathname !== "/payments/paypal/create-subscription") {
       return reply({ ok: true, service: "RickStreams upload service" }, 200, origin);
     }
 
@@ -374,6 +485,9 @@ export default {
         const result = await publishVideoToFirebase(request, env, user, url.origin);
         return reply(result, 200, origin);
       }
+
+      if (url.pathname === "/watch/start") { const user=await requireUser(request,env); return reply(await startWatchSession(request,env,user),200,origin); }
+      if (url.pathname === "/watch/heartbeat") { const user=await requireUser(request,env); return reply(await heartbeatWatchSession(request,env,user),200,origin); }
 
       if (url.pathname === "/upload/init") {
         const body = await request.json();
