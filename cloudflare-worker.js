@@ -230,6 +230,36 @@ async function handlePaypalWebhook(request,env){
 }
 
 
+
+async function deleteCreatorVideo(request,env,user,origin){
+  const body=await request.json(),videoId=String(body.videoId||"");
+  if(!/^[A-Za-z0-9_-]{8,32}$/.test(videoId)) throw new Error("Invalid video ID.");
+  const {token,projectId}=await serviceAccessToken(env);
+  if(projectId!=="streamtv-football-hub") throw new Error("Firebase service account belongs to the wrong project.");
+  const path="streamtv/publicState/videos/"+videoId,current=await firebaseRead(path,token,true);
+  if(!current.data) throw new Error("Video not found.");
+  if(current.data.uploadedBy!==user.localId&&(user.email||"").toLowerCase()!==(env.OWNER_EMAIL||"").toLowerCase()) throw new Error("You can only delete your own videos.");
+  const keyFor=value=>{try{const u=new URL(value);if(u.origin!==origin||!u.pathname.startsWith("/media/"))return "";const k=decodeURIComponent(u.pathname.slice(7));return k.startsWith("rickstreams/")&&!k.includes("..")?k:"";}catch{return "";}};
+  const videoKey=keyFor(current.data.videoUrl||""),thumbKey=keyFor(current.data.thumbnailUrl||"");
+  const result=await fetch(firebaseUrl(path,token),{method:"PUT",headers:{"Content-Type":"application/json","If-Match":current.etag||"null_etag"},body:"null"});
+  if(!result.ok) throw new Error("Could not delete the video record.");
+  if(videoKey) await env.RICKSTREAMS_BUCKET.delete(videoKey);
+  if(thumbKey) await env.RICKSTREAMS_BUCKET.delete(thumbKey);
+  return {ok:true,videoId};
+}
+async function saveCreatorPaymentMethod(request,env,user){
+  const body=await request.json(),email=String(body.paypalEmail||"").trim().toLowerCase();
+  if(email.length>254||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("Enter a valid PayPal email address.");
+  const status=env.CREATOR_SUBSCRIPTIONS?await env.CREATOR_SUBSCRIPTIONS.get("creator:"+user.localId,"json"):null;
+  if(status?.status!=="active"&&(user.email||"").toLowerCase()!==(env.OWNER_EMAIL||"").toLowerCase()) throw new Error("An active creator subscription is required to add payout details.");
+  const {token,projectId}=await serviceAccessToken(env);
+  if(projectId!=="streamtv-football-hub") throw new Error("Firebase service account belongs to the wrong project.");
+  const path="streamtv/creatorPayoutMethods/"+user.localId;
+  const response=await fetch(firebaseUrl(path,token),{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({paypalEmail:email,updatedAt:Date.now(),status:"provided"})});
+  if(!response.ok) throw new Error("Could not save your PayPal payout details.");
+  return {ok:true,paypalEmail:email};
+}
+
 async function publishVideoToFirebase(request, env, user, origin) {
   const body = await request.json();
   const title = String(body.title || "").trim().slice(0, 100);
@@ -467,7 +497,7 @@ export default {
 
     if (url.pathname === "/creator/status") { try { const user=await requireUser(request,env); const record=env.CREATOR_SUBSCRIPTIONS?await env.CREATOR_SUBSCRIPTIONS.get("creator:"+user.localId,"json"):null; return reply({status:record?.status||"inactive",creator:record||null},200,origin); } catch(error) { return reply({error:error.message},401,origin); } }
 
-    if (!url.pathname.startsWith("/upload/") && url.pathname !== "/publish" && url.pathname !== "/watch/start" && url.pathname !== "/watch/heartbeat" && url.pathname !== "/admin/migrate-existing-accounts" && url.pathname !== "/admin/paypal/setup-plan" && url.pathname !== "/payments/paypal/create-subscription") {
+    if (!url.pathname.startsWith("/upload/") && url.pathname !== "/publish" && url.pathname !== "/video/delete" && url.pathname !== "/creator/payment-method" && url.pathname !== "/watch/start" && url.pathname !== "/watch/heartbeat" && url.pathname !== "/admin/migrate-existing-accounts" && url.pathname !== "/admin/paypal/setup-plan" && url.pathname !== "/payments/paypal/create-subscription") {
       return reply({ ok: true, service: "RickStreams upload service" }, 200, origin);
     }
 
@@ -497,6 +527,8 @@ export default {
         return reply(result, 200, origin);
       }
 
+      if (url.pathname === "/video/delete") { const user=await requireUser(request,env); return reply(await deleteCreatorVideo(request,env,user,url.origin),200,origin); }
+      if (url.pathname === "/creator/payment-method") { const user=await requireUser(request,env); return reply(await saveCreatorPaymentMethod(request,env,user),200,origin); }
       if (url.pathname === "/watch/start") { const user=await requireUser(request,env); return reply(await startWatchSession(request,env,user),200,origin); }
       if (url.pathname === "/watch/heartbeat") { const user=await requireUser(request,env); return reply(await heartbeatWatchSession(request,env,user),200,origin); }
 
