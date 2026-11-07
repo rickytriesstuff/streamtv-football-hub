@@ -367,7 +367,7 @@ async function publishVideoToFirebase(request, env, user, origin) {
   if (projectId !== "streamtv-football-hub") throw new Error("Firebase service account belongs to the wrong project.");
   const record = {
     title, description, orientation, durationSeconds: Math.round(durationSeconds),
-    videoUrl: videoUrl.href, thumbnailUrl, views: 0, eligibleViews: 0,
+    videoUrl: videoUrl.href, thumbnailUrl, views: 0, boostViews: 0, boostStep: 0, boostLastAt: Date.now(), boostComplete: false, eligibleViews: 0,
     earningsUsd: 0, createdAt: Date.now(), uploadedBy: user.localId,
     viewCountType: "verified_pending"
   };
@@ -545,7 +545,44 @@ function parseRange(header, size) {
   return { offset: start, length: end - start + 1, end };
 }
 
+const CREATOR_VIEW_BOOST_STEPS = [100, 200, 150, 86, 100];
+const CREATOR_VIEW_BOOST_TARGET = 1122;
+const CREATOR_VIEW_BOOST_INTERVAL = 5 * 60 * 1000;
+
+async function runCreatorViewBoost(env, now = Date.now()) {
+  const {token,projectId}=await serviceAccessToken(env);
+  if(projectId!=="streamtv-football-hub") throw new Error("Firebase service account belongs to the wrong project.");
+  const collection=await firebaseRead("streamtv/publicState/videos",token);
+  const videos=collection.data&&typeof collection.data==="object"?collection.data:{};
+  let updated=0,completed=0,checked=0;
+  for(const videoId of Object.keys(videos)){
+    if(!videos[videoId]||!videos[videoId].videoUrl) continue;
+    checked++;
+    const path="streamtv/publicState/videos/"+encodeURIComponent(videoId);
+    for(let attempt=0;attempt<6;attempt++){
+      const current=await firebaseRead(path,token,true);
+      const video=current.data;
+      if(!video||!video.videoUrl) break;
+      const boostViews=Math.max(0,Math.min(CREATOR_VIEW_BOOST_TARGET,Number(video.boostViews)||0));
+      if(boostViews>=CREATOR_VIEW_BOOST_TARGET){completed++;break;}
+      const lastAt=Number(video.boostLastAt)||Math.min(Number(video.createdAt)||0,now-CREATOR_VIEW_BOOST_INTERVAL);
+      if(now-lastAt<CREATOR_VIEW_BOOST_INTERVAL) break;
+      const step=Math.max(0,Math.floor(Number(video.boostStep)||0));
+      const increment=CREATOR_VIEW_BOOST_STEPS[step%CREATOR_VIEW_BOOST_STEPS.length];
+      const nextBoost=Math.min(CREATOR_VIEW_BOOST_TARGET,boostViews+increment);
+      const next={...video,boostViews:nextBoost,boostStep:step+1,boostLastAt:now,boostComplete:nextBoost>=CREATOR_VIEW_BOOST_TARGET};
+      const write=await firebaseCompareAndSet(path,next,token,current.etag||"null_etag");
+      if(write.ok){updated++;if(next.boostComplete)completed++;break;}
+      if(write.status!==412){const detail=await write.text().catch(()=>"");throw new Error("Could not update creator boost for "+videoId+" ("+write.status+"): "+detail.slice(0,200));}
+    }
+  }
+  return {ok:true,checked,updated,completed,target:CREATOR_VIEW_BOOST_TARGET};
+}
+
 export default {
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(runCreatorViewBoost(env).then(result=>console.log("RickStreams creator view boost:",JSON.stringify(result))).catch(error=>console.error("RickStreams creator view boost failed:",error)));
+  },
   async fetch(request, env) {
     const url = new URL(request.url);
     const origin = request.headers.get("Origin") || "";
