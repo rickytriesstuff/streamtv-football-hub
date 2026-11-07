@@ -118,9 +118,10 @@ async function migrateExistingAccounts(env) {
   }
   return {migrated};
 }
-\n
+
+
 async function requireUser(request, env) {
-  const token=(request.headers.get("Authorization")||"").replace(/^Bearer\\s+/i,"");
+  const token=(request.headers.get("Authorization")||"").replace(/^Bearer\s+/i,"");
   if(!token) throw new Error("Please sign in first.");
   const response=await fetch("https://identitytoolkit.googleapis.com/v1/accounts:lookup?key="+encodeURIComponent(env.FIREBASE_API_KEY),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({idToken:token})});
   if(!response.ok) throw new Error("Your sign-in session could not be verified. Please log in again.");
@@ -147,7 +148,8 @@ async function setupPaypalPlan(env){
   if(!env.CREATOR_SUBSCRIPTIONS) throw new Error("Cloudflare KV binding CREATOR_SUBSCRIPTIONS is missing.");
   const product=await paypalRequest(env,"/v1/catalogs/products","POST",{name:"RickStreams Creator Membership",description:"Monthly creator membership for RickStreams",type:"SERVICE",category:"SOFTWARE"});
   const plan=await paypalRequest(env,"/v1/billing/plans","POST",{product_id:product.id,name:"RickStreams Creator Monthly",description:"RickStreams creator membership, billed monthly",billing_cycles:[{frequency:{interval_unit:"MONTH",interval_count:1},tenure_type:"REGULAR",sequence:1,total_cycles:0,pricing_scheme:{fixed_price:{value:"1.99",currency_code:"USD"}}}],payment_preferences:{auto_bill_outstanding:true,setup_fee_failure_action:"CANCEL",payment_failure_threshold:1}});
-  await paypalRequest(env,"/v1/billing/plans/"+encodeURIComponent(plan.id)+"/activate","POST",{});\n  await env.CREATOR_SUBSCRIPTIONS.put("paypal:plan_id",plan.id);
+  await paypalRequest(env,"/v1/billing/plans/"+encodeURIComponent(plan.id)+"/activate","POST",{});
+  await env.CREATOR_SUBSCRIPTIONS.put("paypal:plan_id",plan.id);
   return {productId:product.id,planId:plan.id};
 }
 async function createPaypalSubscription(request,env,user){
@@ -251,16 +253,28 @@ export default {
       return new Response(object.body, { status: 206, headers });
     }
 
-    if (url.pathname === "/payments/paypal/webhook" && request.method === "POST") { try { const result=await handlePaypalWebhook(request,env); return reply(result,200,origin); } catch(error) { return reply({error:error.message||"Webhook processing failed."},400,origin); } }\n\n    if (url.pathname === "/creator/status") { try { const user=await requireUser(request,env); const record=env.CREATOR_SUBSCRIPTIONS?await env.CREATOR_SUBSCRIPTIONS.get("creator:"+user.localId,"json"):null; return reply({status:record?.status||"inactive",creator:record||null},200,origin); } catch(error) { return reply({error:error.message},401,origin); } }\n\n    if (!url.pathname.startsWith("/upload/") && url.pathname !== "/admin/migrate-existing-accounts" && url.pathname !== "/admin/paypal/setup-plan" && url.pathname !== "/payments/paypal/create-subscription") {
+    if (url.pathname === "/payments/paypal/webhook" && request.method === "POST") { try { const result=await handlePaypalWebhook(request,env); return reply(result,200,origin); } catch(error) { return reply({error:error.message||"Webhook processing failed."},400,origin); } }
+
+    if (url.pathname === "/creator/status") { try { const user=await requireUser(request,env); const record=env.CREATOR_SUBSCRIPTIONS?await env.CREATOR_SUBSCRIPTIONS.get("creator:"+user.localId,"json"):null; return reply({status:record?.status||"inactive",creator:record||null},200,origin); } catch(error) { return reply({error:error.message},401,origin); } }
+
+    if (!url.pathname.startsWith("/upload/") && url.pathname !== "/admin/migrate-existing-accounts" && url.pathname !== "/admin/paypal/setup-plan" && url.pathname !== "/payments/paypal/create-subscription") {
       return reply({ ok: true, service: "RickStreams upload service" }, 200, origin);
     }
 
     try {
-      await requireOwner(request, env);
-
       if (request.method !== "POST") return reply({ error: "Method not allowed" }, 405, origin);
 
-      if (url.pathname === "/admin/paypal/setup-plan") { const result=await setupPaypalPlan(env); return reply({ok:true,...result},200,origin); }\n\n      if (url.pathname === "/admin/migrate-existing-accounts") {
+      if (url.pathname === "/payments/paypal/create-subscription") {
+        const user = await requireUser(request, env);
+        const result = await createPaypalSubscription(request, env, user);
+        return reply(result, 200, origin);
+      }
+
+      await requireOwner(request, env);
+
+      if (url.pathname === "/admin/paypal/setup-plan") { const result=await setupPaypalPlan(env); return reply({ok:true,...result},200,origin); }
+
+      if (url.pathname === "/admin/migrate-existing-accounts") {
         const result = await migrateExistingAccounts(env);
         return reply({ ok:true, migrated:result.migrated, status:"grandfathered" }, 200, origin);
       }
