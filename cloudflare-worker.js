@@ -43,6 +43,15 @@ async function requireOwner(request, env) {
   return user;
 }
 
+async function requireCreatorOrOwner(request, env) {
+  const user=await requireUser(request,env);
+  if((user.email||"").toLowerCase()===(env.OWNER_EMAIL||"").toLowerCase()) return user;
+  if(!env.CREATOR_SUBSCRIPTIONS) throw new Error("Creator verification is temporarily unavailable.");
+  const creator=await env.CREATOR_SUBSCRIPTIONS.get("creator:"+user.localId,"json");
+  if(!creator || creator.status!=="active") throw new Error("An active, verified creator subscription is required to upload.");
+  return user;
+}
+
 
 function base64url(bytes) {
   let binary = "";
@@ -299,14 +308,16 @@ export default {
         return reply(result, 200, origin);
       }
 
-      await requireOwner(request, env);
-
-      if (url.pathname === "/admin/paypal/setup-plan") { const result=await setupPaypalPlan(env); return reply({ok:true,...result},200,origin); }
+      if (url.pathname === "/admin/paypal/setup-plan") {
+        await requireOwner(request, env); const result=await setupPaypalPlan(env); return reply({ok:true,...result},200,origin); }
 
       if (url.pathname === "/admin/migrate-existing-accounts") {
+        await requireOwner(request, env);
         const result = await migrateExistingAccounts(env);
         return reply({ ok:true, migrated:result.migrated, status:"grandfathered" }, 200, origin);
       }
+
+      if (url.pathname.startsWith("/upload/")) await requireCreatorOrOwner(request, env);
 
       if (url.pathname === "/upload/init") {
         const body = await request.json();
