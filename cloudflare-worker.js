@@ -289,11 +289,11 @@ async function handlePaypalWebhook(request,env){
 async function deleteCreatorVideo(request,env,user,origin){
   const body=await request.json(),videoId=String(body.videoId||"");
   if(!/^[A-Za-z0-9_-]{8,32}$/.test(videoId)) throw new Error("Invalid video ID.");
+  if((user.email||"").toLowerCase()!==(env.OWNER_EMAIL||"").toLowerCase()) throw new Error("Only the site owner can manage Douyinflix episodes.");
   const {token,projectId}=await serviceAccessToken(env);
   if(projectId!=="streamtv-football-hub") throw new Error("Firebase service account belongs to the wrong project.");
-  const path="streamtv/publicState/videos/"+videoId,current=await firebaseRead(path,token,true);
-  if(!current.data) throw new Error("Video not found.");
-  if(current.data.uploadedBy!==user.localId&&(user.email||"").toLowerCase()!==(env.OWNER_EMAIL||"").toLowerCase()) throw new Error("You can only delete your own videos.");
+  const path="douyinflix/publicState/videos/"+videoId,current=await firebaseRead(path,token,true);
+  if(!current.data) throw new Error("Episode not found.");
   const keyFor=value=>{try{const u=new URL(value);if(u.origin!==origin||!u.pathname.startsWith("/media/"))return "";const k=decodeURIComponent(u.pathname.slice(7));return k.startsWith("rickstreams/")&&!k.includes("..")?k:"";}catch{return "";}};
   const videoKey=keyFor(current.data.videoUrl||""),thumbKey=keyFor(current.data.thumbnailUrl||"");
   const result=await fetch(firebaseUrl(path),{method:"PUT",headers:{"Authorization":"Bearer "+token,"Content-Type":"application/json","If-Match":current.etag||"null_etag"},body:"null"});
@@ -669,7 +669,7 @@ export default {
         return reply(result, 200, origin);
       }
 
-      if (url.pathname === "/video/delete") { const user=await requireUser(request,env); return reply(await deleteCreatorVideo(request,env,user,url.origin),200,origin); }
+      if (url.pathname === "/video/delete") { const user=await requireOwner(request,env); return reply(await deleteCreatorVideo(request,env,user,url.origin),200,origin); }
       if (url.pathname === "/creator/payment-method") { const user=await requireUser(request,env); return reply(await saveCreatorPaymentMethod(request,env,user),200,origin); }
       if (url.pathname === "/creator/payout/request") { const user=await requireUser(request,env); return reply(await requestBitcoinPayout(request,env,user),200,origin); }
       if (url.pathname === "/watch/start") { const user=await requireUser(request,env); return reply(await startWatchSession(request,env,user),200,origin); }
