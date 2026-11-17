@@ -339,6 +339,12 @@ async function publishVideoToFirebase(request, env, user, origin) {
   const body = await request.json();
   const title = String(body.title || "").trim().slice(0, 100);
   const description = String(body.description || "").trim().slice(0, 300);
+  const seriesTitle = String(body.seriesTitle || title).trim().slice(0, 100);
+  const seriesId = String(body.seriesId || seriesTitle.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 80) || "series").slice(0, 80);
+  const episodeNumber = Math.max(1, Math.floor(Number(body.episodeNumber) || 1));
+  const seasonNumber = Math.max(1, Math.floor(Number(body.seasonNumber) || 1));
+  const episodeTitle = String(body.episodeTitle || title).trim().slice(0, 100);
+  const genre = String(body.genre || "Drama").trim().slice(0, 40);
   const orientation = body.orientation === "horizontal" ? "horizontal" : "vertical";
   const durationSeconds = Number(body.durationSeconds);
   if (!title) throw new Error("Please add a video title.");
@@ -369,6 +375,8 @@ async function publishVideoToFirebase(request, env, user, origin) {
     title, description, orientation, durationSeconds: Math.round(durationSeconds),
     videoUrl: videoUrl.href, thumbnailUrl, views: 0, boostViews: 0, boostStep: 0, boostLastAt: Date.now(), boostComplete: false, eligibleViews: 0,
     earningsUsd: 0, createdAt: Date.now(), uploadedBy: user.localId,
+    seriesId, seriesTitle, episodeNumber, seasonNumber, episodeTitle, genre,
+    synopsis: description, isFeatured: body.isFeatured === true,
     viewCountType: "verified_pending"
   };
   const dbPath = "streamtv/publicState/videos/" + encodeURIComponent(videoId);
