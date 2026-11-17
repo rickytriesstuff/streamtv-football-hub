@@ -83,7 +83,7 @@
 <div class="field"><label>Season number</label><input id="seasonNumber" type="number" min="1" value="1" required></div>
 <div class="field"><label>Genre</label><select id="genre"><option>Romance</option><option>Revenge</option><option>Billionaire</option><option>Fantasy</option><option>Thriller</option><option>Kids &amp; Family</option><option>Family</option><option>Comedy</option><option>Action</option><option>Werewolf</option><option>Historical</option><option>Other</option></select></div>
 <div class="field"><label>Video orientation</label><select id="orientation"><option value="vertical">Vertical · phone-first</option><option value="horizontal">Horizontal · widescreen</option></select></div>
-<div class="field"><label>All episode video files</label><input id="videoFile" type="file" accept="video/mp4,video/webm,video/quicktime" multiple required><p class="muted">Select every episode in this season at once. No special filenames needed. Episodes are numbered automatically in the order shown in the selection list and uploaded one after another.</p><div class="muted" id="episodeSelection">No episodes selected.</div></div>
+<div class="field"><label>Number of episode slots</label><input id="episodeCount" type="number" min="1" max="100" value="10"><p class="muted">Choose how many episodes this season has. Each episode gets its own upload slot below.</p><div id="episodeSlots" style="display:grid;gap:10px;margin-top:10px"></div><div class="muted" id="episodeSelection">No episodes selected.</div></div>
 <div class="field"><label>Drama poster / thumbnail</label><input id="posterFile" type="file" accept="image/*"></div>
 <div class="notice">No episode duration limit. Upload size and network limits may still apply.</div><p class="muted" id="uploadMessage"></p><div class="actions"><button type="button" class="btn" id="closeUpload">Cancel</button><button class="btn primary" id="uploadSubmit" type="submit">Upload all episodes</button></div></form></div></div>
 <script type="module">
@@ -150,13 +150,35 @@ async function uploadToR2(file,kind,onProgress,sharedToken){
   throw error;
  }
 }
-function selectedEpisodes(){
- return [...$("videoFile").files].map((file,index)=>({file,number:index+1,title:"Episode "+(index+1)}));
+function renderEpisodeSlots(){
+ const count=Math.max(1,Math.min(100,Number($("episodeCount").value)||1));
+ $("episodeCount").value=count;
+ const slots=$("episodeSlots");
+ const previous=Array.from(slots.querySelectorAll("input[type=file]")).map(input=>input.files[0]||null);
+ slots.innerHTML="";
+ for(let i=0;i<count;i++){
+  const wrap=document.createElement("div");
+  wrap.className="field";
+  wrap.style.margin="0";
+  const label=document.createElement("label");
+  label.textContent="Episode "+(i+1);
+  const input=document.createElement("input");
+  input.type="file";input.accept="video/mp4,video/webm,video/quicktime";input.id="episodeFile"+(i+1);
+  if(previous[i]){const dt=new DataTransfer();dt.items.add(previous[i]);input.files=dt.files;}
+  input.addEventListener("change",updateEpisodeSelection);
+  wrap.append(label,input);slots.appendChild(wrap);
+ }
+ updateEpisodeSelection();
 }
-$("videoFile").addEventListener("change",()=>{
+function selectedEpisodes(){
+ return Array.from($("episodeSlots").querySelectorAll('input[type="file"]')).map((input,index)=>input.files[0]?({file:input.files[0],number:index+1,title:"Episode "+(index+1)}):null).filter(Boolean);
+}
+function updateEpisodeSelection(){
  const list=selectedEpisodes();
- $("episodeSelection").textContent=list.length?list.map(x=>"EP "+String(x.number).padStart(2,"0")+" · "+x.file.name).join("  |  "):"No episodes selected. Episodes will be numbered in the order shown here.";
-});
+ $("episodeSelection").textContent=list.length?list.map(x=>"EP "+String(x.number).padStart(2,"0")+" · "+x.file.name).join("  |  "):"No episodes selected. Add a video to each episode slot.";
+}
+$("episodeCount").addEventListener("change",renderEpisodeSlots);
+renderEpisodeSlots();
 $("uploadForm").onsubmit=async e=>{
  e.preventDefault();
  const user=auth.currentUser;
@@ -186,7 +208,7 @@ $("uploadForm").onsubmit=async e=>{
    published++;
   }
   $("uploadMessage").textContent="Success! Published all "+published+" episodes in upload order.";
-  e.target.reset();$("episodeSelection").textContent="No episodes selected.";
+  e.target.reset();renderEpisodeSlots();
   setTimeout(()=>$("uploadModal").classList.remove("open"),1200);
  }catch(err){
   $("uploadMessage").textContent=(published?published+" episode(s) published. ":"")+"Stopped: "+(err.message||"Upload failed.")+" You can select the remaining episodes and continue.";
