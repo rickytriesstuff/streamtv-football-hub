@@ -121,7 +121,35 @@ document.querySelectorAll("[data-page]").forEach(b=>b.onclick=()=>showPage(b.dat
 $("search").addEventListener("input",()=>{showPage("home");render();});
 $("closeUpload").onclick=()=>$("uploadModal").classList.remove("open");
 function fileDuration(file){return new Promise((resolve,reject)=>{const v=document.createElement("video");v.preload="metadata";v.onloadedmetadata=()=>{URL.revokeObjectURL(v.src);resolve(v.duration);};v.onerror=()=>reject(new Error("Could not read video duration. Use MP4, WebM or MOV."));v.src=URL.createObjectURL(file);});}
-async function uploadToR2(file,kind,onProgress){const token=await auth.currentUser.getIdToken(true);const init=await fetch(API+"/upload/init",{method:"POST",headers:{Authorization:"Bearer "+token,"Content-Type":"application/json"},body:JSON.stringify({kind,fileName:file.name,contentType:file.type||(kind==="thumbnail"?"image/jpeg":"video/mp4")})});const d=await init.json();if(!init.ok)throw new Error(d.error||"Could not start upload.");const chunkSize=8*1024*1024,count=Math.ceil(file.size/chunkSize),parts=[];try{for(let i=0;i<count;i++){const chunk=file.slice(i*chunkSize,Math.min(file.size,(i+1)*chunkSize));const r=await fetch(API+"/upload/part",{method:"POST",headers:{Authorization:"Bearer "+token,"Content-Type":"application/octet-stream","X-Upload-Key":d.key,"X-Upload-Id":d.uploadId,"X-Part-Number":String(i+1)},body:chunk});const p=await r.json();if(!r.ok)throw new Error(p.error||"Upload part failed.");parts.push({partNumber:i+1,etag:p.etag});onProgress?.(Math.round((i+1)/count*100));}const r=await fetch(API+"/upload/complete",{method:"POST",headers:{Authorization:"Bearer "+token,"Content-Type":"application/json"},body:JSON.stringify({key:d.key,uploadId:d.uploadId,parts})});const done=await r.json();if(!r.ok)throw new Error(done.error||"Could not finish upload.");return done.mediaUrl;}catch(e){fetch(API+"/upload/abort",{method:"POST",headers:{Authorization:"Bearer "+token,"Content-Type":"application/json"},body:JSON.stringify({key:d.key,uploadId:d.uploadId})}).catch(()=>{});throw e;}}
+async function uploadToR2(file,kind,onProgress,sharedToken){
+ const token=sharedToken||await auth.currentUser.getIdToken();
+ const init=await fetch(API+"/upload/init",{method:"POST",headers:{Authorization:"Bearer "+token,"Content-Type":"application/json"},body:JSON.stringify({kind,fileName:file.name,contentType:file.type||(kind==="thumbnail"?"image/jpeg":"video/mp4")})});
+ const d=await init.json();if(!init.ok)throw new Error(d.error||"Could not start upload.");
+ const chunkSize=8*1024*1024,count=Math.ceil(file.size/chunkSize),parts=new Array(count);
+ let nextPart=0,completed=0;
+ const concurrency=Math.min(4,count);
+ try{
+  const uploadPart=async()=>{
+   while(true){
+    const index=nextPart++;if(index>=count)return;
+    const chunk=file.slice(index*chunkSize,Math.min(file.size,(index+1)*chunkSize));
+    const response=await fetch(API+"/upload/part",{method:"POST",headers:{Authorization:"Bearer "+token,"Content-Type":"application/octet-stream","X-Upload-Key":d.key,"X-Upload-Id":d.uploadId,"X-Part-Number":String(index+1)},body:chunk});
+    const part=await response.json().catch(()=>({}));
+    if(!response.ok)throw new Error(part.error||"Upload part "+(index+1)+" failed.");
+    parts[index]={partNumber:index+1,etag:part.etag};
+    completed++;onProgress?.(Math.round(completed/count*100));
+   }
+  };
+  await Promise.all(Array.from({length:concurrency},()=>uploadPart()));
+  const response=await fetch(API+"/upload/complete",{method:"POST",headers:{Authorization:"Bearer "+token,"Content-Type":"application/json"},body:JSON.stringify({key:d.key,uploadId:d.uploadId,parts})});
+  const done=await response.json().catch(()=>({}));
+  if(!response.ok)throw new Error(done.error||"Could not finish upload.");
+  return done.mediaUrl;
+ }catch(error){
+  fetch(API+"/upload/abort",{method:"POST",headers:{Authorization:"Bearer "+token,"Content-Type":"application/json"},body:JSON.stringify({key:d.key,uploadId:d.uploadId})}).catch(()=>{});
+  throw error;
+ }
+}
 function selectedEpisodes(){
  return [...$("videoFile").files].map((file,index)=>({file,number:index+1,title:"Episode "+(index+1)}));
 }
@@ -141,13 +169,13 @@ $("uploadForm").onsubmit=async e=>{
  let published=0,thumbnailUrl="";
  try{
   const poster=$("posterFile").files[0];
-  if(poster){$("uploadMessage").textContent="Uploading shared series poster...";thumbnailUrl=await uploadToR2(poster,"thumbnail",p=>$("uploadMessage").textContent="Uploading poster "+p+"%");}
+  if(poster){$("uploadMessage").textContent="Uploading shared series poster...";thumbnailUrl=await uploadToR2(poster,"thumbnail",p=>$("uploadMessage").textContent="Uploading poster "+p+"%",token);}
   const token=await user.getIdToken(true);
   for(let i=0;i<files.length;i++){
    const item=files[i],label="Episode "+item.number+" ("+(i+1)+"/"+files.length+")";
    $("uploadMessage").textContent="Reading duration for "+label+"...";
    const duration=await fileDuration(item.file);
-   const videoUrl=await uploadToR2(item.file,"video",p=>$("uploadMessage").textContent="Uploading "+label+": "+p+"%");
+   const videoUrl=await uploadToR2(item.file,"video",p=>$("uploadMessage").textContent="Uploading "+label+": "+p+"%",token);
    const videoId=push(dbRef(db,"/douyinflix/publicState/videos")).key;
    const description=$("episodeDescription").value.trim();
    const payload={videoId,title:item.title,episodeTitle:item.title,description,synopsis:description,seriesTitle,seriesId,seasonNumber,episodeNumber:item.number,genre,orientation,isOriginal:false,durationSeconds:Math.round(duration),videoUrl,thumbnailUrl};
