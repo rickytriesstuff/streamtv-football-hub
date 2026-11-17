@@ -299,7 +299,7 @@ async function deleteCreatorVideo(request,env,user,origin){
   const result=await fetch(firebaseUrl(path),{method:"PUT",headers:{"Authorization":"Bearer "+token,"Content-Type":"application/json","If-Match":current.etag||"null_etag"},body:"null"});
   if(!result.ok) throw new Error("Could not delete the video record.");
   if(videoKey) await env.RICKSTREAMS_BUCKET.delete(videoKey);
-  if(thumbKey) await env.RICKSTREAMS_BUCKET.delete(thumbKey);
+  // Keep the shared series poster when deleting an individual episode.
   return {ok:true,videoId};
 }
 function validBitcoinAddress(value){
