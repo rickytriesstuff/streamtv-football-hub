@@ -127,7 +127,7 @@ async function uploadToR2(file,kind,onProgress,sharedToken){
  const d=await init.json();if(!init.ok)throw new Error(d.error||"Could not start upload.");
  const chunkSize=8*1024*1024,count=Math.ceil(file.size/chunkSize),parts=new Array(count);
  let nextPart=0,completed=0;
- const concurrency=Math.min(4,count);
+ const concurrency=Math.min(10,count);
  try{
   const uploadPart=async()=>{
    while(true){
