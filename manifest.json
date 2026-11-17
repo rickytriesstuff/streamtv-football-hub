@@ -1,8 +1,8 @@
 {
   "id": "/",
-  "name": "RickDrama",
-  "short_name": "RickDrama",
-  "description": "Watch addictive short drama series, episode by episode.",
+  "name": "Douyinflix",
+  "short_name": "Douyinflix",
+  "description": "Watch addictive short drama series, episode by episode on Douyinflix.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
