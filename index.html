@@ -79,14 +79,13 @@
 <div class="modal" id="authModal"><div class="box"><div class="eyebrow">WELCOME TO DOUYINFLIX</div><h2>Sign in or create an account</h2><p class="muted">Choose how you want to sign in and save your watchlist.</p><button class="btn primary" id="googleSignIn" style="width:100%;padding:13px">Continue with Google</button><p class="muted" id="authMessage"></p><div class="actions"><button class="btn" id="closeAuth">Cancel</button></div></div></div>
 <div class="modal" id="uploadModal"><div class="box"><div class="eyebrow">OWNER STUDIO</div><h2>Add a drama episode</h2><p class="muted">Publish a drama episode. Videos are stored in Cloudflare R2 and episode details are saved in Firebase.</p><form id="uploadForm">
 <div class="field"><label>Drama / series title</label><input id="seriesTitle" maxlength="100" required placeholder="e.g. The Billionaire's Secret Bride"></div>
-<div class="field"><label>Episode title</label><input id="episodeTitle" maxlength="100" required placeholder="e.g. The Contract"></div>
-<div class="field"><label>Episode synopsis</label><textarea id="episodeDescription" maxlength="300" placeholder="What happens in this episode?"></textarea></div>
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div class="field"><label>Season</label><input id="seasonNumber" type="number" min="1" value="1"></div><div class="field"><label>Episode number</label><input id="episodeNumber" type="number" min="1" value="1"></div></div>
+<div class="field"><label>Shared series description</label><textarea id="episodeDescription" maxlength="300" placeholder="A short description for this series."></textarea></div>
+<div class="field"><label>Season number</label><input id="seasonNumber" type="number" min="1" value="1" required></div>
 <div class="field"><label>Genre</label><select id="genre"><option>Romance</option><option>Revenge</option><option>Billionaire</option><option>Fantasy</option><option>Thriller</option><option>Kids &amp; Family</option><option>Family</option><option>Comedy</option><option>Action</option><option>Werewolf</option><option>Historical</option><option>Other</option></select></div>
 <div class="field"><label>Video orientation</label><select id="orientation"><option value="vertical">Vertical · phone-first</option><option value="horizontal">Horizontal · widescreen</option></select></div>
-<div class="field"><label>Episode video file</label><input id="videoFile" type="file" accept="video/mp4,video/webm,video/quicktime" required></div>
+<div class="field"><label>All episode video files</label><input id="videoFile" type="file" accept="video/mp4,video/webm,video/quicktime" multiple required><p class="muted">Select every episode in this season at once. Name files with episode numbers, such as Series E01.mp4, Series E02.mp4, or Series Episode 3.mp4. They will be sorted and published in episode order.</p><div class="muted" id="episodeSelection">No episodes selected.</div></div>
 <div class="field"><label>Drama poster / thumbnail</label><input id="posterFile" type="file" accept="image/*"></div>
-<div class="notice">No episode duration limit. Upload size and network limits may still apply.</div><p class="muted" id="uploadMessage"></p><div class="actions"><button type="button" class="btn" id="closeUpload">Cancel</button><button class="btn primary" id="uploadSubmit" type="submit">Upload episode</button></div></form></div></div>
+<div class="notice">No episode duration limit. Upload size and network limits may still apply.</div><p class="muted" id="uploadMessage"></p><div class="actions"><button type="button" class="btn" id="closeUpload">Cancel</button><button class="btn primary" id="uploadSubmit" type="submit">Upload all episodes</button></div></form></div></div>
 <script type="module">
 import{initializeApp}from"https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import{getAuth,GoogleAuthProvider,signInWithPopup,signInWithRedirect,getRedirectResult,onAuthStateChanged,signOut,setPersistence,browserLocalPersistence}from"https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
@@ -123,7 +122,59 @@ $("search").addEventListener("input",()=>{showPage("home");render();});
 $("closeUpload").onclick=()=>$("uploadModal").classList.remove("open");
 function fileDuration(file){return new Promise((resolve,reject)=>{const v=document.createElement("video");v.preload="metadata";v.onloadedmetadata=()=>{URL.revokeObjectURL(v.src);resolve(v.duration);};v.onerror=()=>reject(new Error("Could not read video duration. Use MP4, WebM or MOV."));v.src=URL.createObjectURL(file);});}
 async function uploadToR2(file,kind,onProgress){const token=await auth.currentUser.getIdToken(true);const init=await fetch(API+"/upload/init",{method:"POST",headers:{Authorization:"Bearer "+token,"Content-Type":"application/json"},body:JSON.stringify({kind,fileName:file.name,contentType:file.type||(kind==="thumbnail"?"image/jpeg":"video/mp4")})});const d=await init.json();if(!init.ok)throw new Error(d.error||"Could not start upload.");const chunkSize=8*1024*1024,count=Math.ceil(file.size/chunkSize),parts=[];try{for(let i=0;i<count;i++){const chunk=file.slice(i*chunkSize,Math.min(file.size,(i+1)*chunkSize));const r=await fetch(API+"/upload/part",{method:"POST",headers:{Authorization:"Bearer "+token,"Content-Type":"application/octet-stream","X-Upload-Key":d.key,"X-Upload-Id":d.uploadId,"X-Part-Number":String(i+1)},body:chunk});const p=await r.json();if(!r.ok)throw new Error(p.error||"Upload part failed.");parts.push({partNumber:i+1,etag:p.etag});onProgress?.(Math.round((i+1)/count*100));}const r=await fetch(API+"/upload/complete",{method:"POST",headers:{Authorization:"Bearer "+token,"Content-Type":"application/json"},body:JSON.stringify({key:d.key,uploadId:d.uploadId,parts})});const done=await r.json();if(!r.ok)throw new Error(done.error||"Could not finish upload.");return done.mediaUrl;}catch(e){fetch(API+"/upload/abort",{method:"POST",headers:{Authorization:"Bearer "+token,"Content-Type":"application/json"},body:JSON.stringify({key:d.key,uploadId:d.uploadId})}).catch(()=>{});throw e;}}
-$("uploadForm").onsubmit=async e=>{e.preventDefault();const user=auth.currentUser;if(!user){$("uploadMessage").textContent="Please log in first.";return;}const file=$("videoFile").files[0];if(!file)return;const orientation=$("orientation").value,b=$("uploadSubmit");b.disabled=true;try{const duration=await fileDuration(file);$("uploadMessage").textContent="Uploading episode to Cloudflare R2...";const videoUrl=await uploadToR2(file,"video",p=>$("uploadMessage").textContent="Uploading video "+p+"%");let thumbnailUrl="";const poster=$("posterFile").files[0];if(poster)thumbnailUrl=await uploadToR2(poster,"thumbnail",p=>$("uploadMessage").textContent="Uploading poster "+p+"%");const title=$("episodeTitle").value.trim(),seriesTitle=$("seriesTitle").value.trim(),seasonNumber=Number($("seasonNumber").value)||1,episodeNumber=Number($("episodeNumber").value)||1,genre=$("genre").value,seriesId=slug(seriesTitle),videoId=push(dbRef(db,"/douyinflix/publicState/videos")).key;const token=await user.getIdToken(true);const payload={videoId,title,episodeTitle:title,description:$("episodeDescription").value.trim(),synopsis:$("episodeDescription").value.trim(),seriesTitle,seriesId,seasonNumber,episodeNumber,genre,orientation,isOriginal:false,durationSeconds:Math.round(duration),videoUrl,thumbnailUrl};const r=await fetch(API+"/publish",{method:"POST",headers:{Authorization:"Bearer "+token,"Content-Type":"application/json"},body:JSON.stringify(payload)});const result=await r.json().catch(()=>({}));if(!r.ok)throw new Error(result.error||"Video uploaded, but publishing failed.");$("uploadMessage").textContent="Episode published!";e.target.reset();$("uploadModal").classList.remove("open");}catch(err){$("uploadMessage").textContent=err.message||"Upload failed.";}finally{b.disabled=false;}};
+function getEpisodeNumber(fileName){
+ const base=fileName.replace(/\\.[^.]+$/,"");
+ const patterns=[/(?:s\\d{1,2})?\\s*(?:e|ep|episode)\\s*[-_. ]*(\\d{1,4})/i,/(?:^|[\\s._-])(\\d{1,4})(?=$|[\\s._-])/];
+ for(const pattern of patterns){const match=base.match(pattern);if(match)return Number(match[1]);}
+ return null;
+}
+function selectedEpisodes(){
+ return [...$("videoFile").files].map(file=>({file,number:getEpisodeNumber(file.name),title:file.name.replace(/\\.[^.]+$/,"").replace(/[._-]+/g," ").trim()})).sort((a,b)=>(a.number??Infinity)-(b.number??Infinity)||a.file.name.localeCompare(b.file.name,undefined,{numeric:true}));
+}
+$("videoFile").addEventListener("change",()=>{
+ const list=selectedEpisodes(), nums=list.map(x=>x.number), missing=list.filter(x=>!x.number), duplicates=nums.filter((n,i)=>n&&nums.indexOf(n)!==i);
+ $("episodeSelection").textContent=list.length?list.map(x=>(x.number?"EP "+x.number:"Missing episode number")+" · "+x.file.name).join("  |  "):"No episodes selected.";
+ if(missing.length)$("episodeSelection").textContent+="  ⚠ Add episode numbers to: "+missing.map(x=>x.file.name).join(", ");
+ else if(duplicates.length)$("episodeSelection").textContent+="  ⚠ Duplicate episode numbers: "+[...new Set(duplicates)].join(", ");
+});
+$("uploadForm").onsubmit=async e=>{
+ e.preventDefault();
+ const user=auth.currentUser;
+ if(!user){$("uploadMessage").textContent="Please log in first.";return;}
+ const files=selectedEpisodes();
+ if(!files.length){$("uploadMessage").textContent="Select the episode files first.";return;}
+ if(files.some(x=>!Number.isInteger(x.number)||x.number<1)){$("uploadMessage").textContent="Every filename needs an episode number, for example E01, EP02 or Episode 3.";return;}
+ const nums=files.map(x=>x.number);
+ if(new Set(nums).size!==nums.length){$("uploadMessage").textContent="There are duplicate episode numbers. Rename the files so each episode number is unique.";return;}
+ const orientation=$("orientation").value,seriesTitle=$("seriesTitle").value.trim(),seasonNumber=Number($("seasonNumber").value)||1,genre=$("genre").value,seriesId=slug(seriesTitle),b=$("uploadSubmit");
+ if(!seriesTitle){$("uploadMessage").textContent="Enter the series title.";return;}
+ b.disabled=true;
+ let published=0,thumbnailUrl="";
+ try{
+  const poster=$("posterFile").files[0];
+  if(poster){$("uploadMessage").textContent="Uploading shared series poster...";thumbnailUrl=await uploadToR2(poster,"thumbnail",p=>$("uploadMessage").textContent="Uploading poster "+p+"%");}
+  const token=await user.getIdToken(true);
+  for(let i=0;i<files.length;i++){
+   const item=files[i],label="Episode "+item.number+" ("+(i+1)+"/"+files.length+")";
+   $("uploadMessage").textContent="Reading duration for "+label+"...";
+   const duration=await fileDuration(item.file);
+   const videoUrl=await uploadToR2(item.file,"video",p=>$("uploadMessage").textContent="Uploading "+label+": "+p+"%");
+   const videoId=push(dbRef(db,"/douyinflix/publicState/videos")).key;
+   const description=$("episodeDescription").value.trim();
+   const payload={videoId,title:item.title,episodeTitle:item.title,description,synopsis:description,seriesTitle,seriesId,seasonNumber,episodeNumber:item.number,genre,orientation,isOriginal:false,durationSeconds:Math.round(duration),videoUrl,thumbnailUrl};
+   $("uploadMessage").textContent="Publishing "+label+"...";
+   const response=await fetch(API+"/publish",{method:"POST",headers:{Authorization:"Bearer "+token,"Content-Type":"application/json"},body:JSON.stringify(payload)});
+   const result=await response.json().catch(()=>({}));
+   if(!response.ok)throw new Error(label+" uploaded but could not be published: "+(result.error||"Unknown publishing error."));
+   published++;
+  }
+  $("uploadMessage").textContent="Success! Published all "+published+" episodes in episode-number order.";
+  e.target.reset();$("episodeSelection").textContent="No episodes selected.";
+  setTimeout(()=>$("uploadModal").classList.remove("open"),1200);
+ }catch(err){
+  $("uploadMessage").textContent=(published?published+" episode(s) published. ":"")+"Stopped: "+(err.message||"Upload failed.")+" You can select the remaining episodes and continue.";
+ }finally{b.disabled=false;}
+};
 onValue(dbRef(db,"/douyinflix/publicState/videos"),snap=>{videos=snap.val()||{};render();renderGenres();});
 $("year").textContent=new Date().getFullYear();
 const qs=new URLSearchParams(location.search);if(qs.get("creator_payment")==="return")$("profileStatus").textContent="You have returned to Douyinflix. Refresh if your account status has not updated.";
