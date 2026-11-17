@@ -1,14 +1,14 @@
 {
   "id": "/",
-  "name": "RickStreams",
-  "short_name": "RickStreams",
-  "description": "Discover and share short videos.",
+  "name": "RickDrama",
+  "short_name": "RickDrama",
+  "description": "Watch addictive short drama series, episode by episode.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "any",
-  "background_color": "#09090d",
-  "theme_color": "#09090d",
+  "background_color": "#100d13",
+  "theme_color": "#100d13",
   "categories": [
     "entertainment",
     "video"
