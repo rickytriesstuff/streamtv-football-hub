@@ -75,7 +75,7 @@
 <footer class="footer"><span>© <span id="year"></span> Douyinflix. Short dramas. Big emotions.</span><span>Community guidelines · Privacy · Terms</span></footer></div>
 <nav class="mobilebar"><button data-page="home"><span>⌂</span>Discover</button><button data-page="trending"><span>🔥</span>Trending</button><button id="mobileUpload" style="display:none"><span>＋</span>Upload</button><button data-page="profile"><span>◉</span>Account</button></nav>
 <div class="overlay" id="detailOverlay"><div class="detail"><div class="detail-hero"><div class="detail-copy"><div class="eyebrow" id="detailGenre">SHORT DRAMA</div><h1 id="detailTitle">Drama title</h1><p id="detailSynopsis"></p><div class="hero-actions"><button class="btn primary" id="playFirst">▶ Start watching</button><button class="btn" id="closeDetail">Close</button></div></div></div><div class="detail-body"><div class="section-head"><div><h2 id="episodeHeading">Episodes</h2><p id="episodeSub">Watch in order or pick an episode.</p></div></div><div class="episode-list" id="episodeList"></div></div></div></div>
-<div class="overlay" id="playerOverlay"><div class="player" id="playerBox"><div class="player-head"><strong id="playingSeries">Now playing</strong><button class="btn" id="closePlayer">✕ Close</button></div><video id="episodeVideo" controls playsinline webkit-playsinline></video><div class="player-foot"><h2 id="playingTitle"></h2><p id="playingMeta"></p><div class="hero-actions"><button class="btn primary" id="nextEpisode">Next episode　›</button><button class="btn" id="backEpisodes">All episodes</button></div></div></div></div>
+<div class="modal" id="editSeriesModal"><div class="box"><div class="eyebrow">OWNER STUDIO</div><h2 id="editSeriesTitle">Manage series</h2><p class="muted">Remove individual episodes or add new ones. Existing episode numbers are preserved.</p><div class="field"><label>Episodes in this series</label><div id="manageEpisodeList" style="display:grid;gap:8px;max-height:240px;overflow:auto"></div></div><div class="field"><label>How many new episodes to add?</label><input id="addEpisodeCount" type="number" min="0" max="100" value="0"></div><div id="addEpisodeSlots" style="display:grid;gap:10px"></div><p class="muted" id="editSeriesMessage"></p><div class="actions"><button type="button" class="btn" id="closeEditSeries">Cancel</button><button type="button" class="btn primary" id="saveSeriesChanges">Save changes</button></div></div></div><div class="overlay" id="playerOverlay"><div class="player" id="playerBox"><div class="player-head"><strong id="playingSeries">Now playing</strong><button class="btn" id="closePlayer">✕ Close</button></div><video id="episodeVideo" controls playsinline webkit-playsinline></video><div class="player-foot"><h2 id="playingTitle"></h2><p id="playingMeta"></p><div class="hero-actions"><button class="btn primary" id="nextEpisode">Next episode　›</button><button class="btn" id="backEpisodes">All episodes</button></div></div></div></div>
 <div class="modal" id="authModal"><div class="box"><div class="eyebrow">WELCOME TO DOUYINFLIX</div><h2>Sign in or create an account</h2><p class="muted">Choose how you want to sign in and save your watchlist.</p><button class="btn primary" id="googleSignIn" style="width:100%;padding:13px">Continue with Google</button><p class="muted" id="authMessage"></p><div class="actions"><button class="btn" id="closeAuth">Cancel</button></div></div></div>
 <div class="modal" id="uploadModal"><div class="box"><div class="eyebrow">OWNER STUDIO</div><h2>Add a drama episode</h2><p class="muted">Publish a drama episode. Videos are stored in Cloudflare R2 and episode details are saved in Firebase.</p><form id="uploadForm">
 <div class="field"><label>Drama / series title</label><input id="seriesTitle" maxlength="100" required placeholder="e.g. The Billionaire's Secret Bride"></div>
@@ -101,7 +101,65 @@ function esc(s){return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&l
 function renderGrid(target,list){const node=$(target);node.innerHTML="";if(!list.length){node.innerHTML='<div class="empty">No dramas here yet. New stories are on the way.</div>';return;}list.forEach(x=>node.appendChild(card(x)));}
 function render(){series=groupSeries();const q=$("search").value.trim().toLowerCase();let filtered=series.filter(x=>(currentGenre==="All"||x.genre.toLowerCase()===currentGenre.toLowerCase())&&(!q||(x.title+" "+x.genre+" "+x.synopsis).toLowerCase().includes(q)));if(document.querySelector('[data-page="trending"].active'))filtered.sort((a,b)=>b.episodes.reduce((n,e)=>n+(Number(e.views)||0),0)-a.episodes.reduce((n,e)=>n+(Number(e.views)||0),0));$("mainHeading").textContent=currentGenre==="All"?"Popular right now":currentGenre+" dramas";$("mainSub").textContent=filtered.length+" stories to discover.";renderGrid("dramaGrid",filtered);const recent=[...series].sort((a,b)=>b.createdAt-a.createdAt).slice(0,6);renderGrid("newGrid",recent);const ranked=[...filtered].sort((a,b)=>b.episodes.reduce((n,e)=>n+(Number(e.views)||0),0)-a.episodes.reduce((n,e)=>n+(Number(e.views)||0),0));renderGrid("recommendedGrid",ranked.slice(0,5));renderGrid("originalGrid",filtered.filter(x=>x.episodes.some(e=>e.isOriginal===true)).slice(0,5));renderGrid("microGrid",filtered.filter(x=>x.episodes.some(e=>Number(e.durationSeconds)>0&&Number(e.durationSeconds)<=300)).slice(0,5));const rail=$("spotlightRail");rail.innerHTML="";filtered.slice(0,3).forEach(x=>{const d=document.createElement("div");d.className="spotlight-card";d.innerHTML=x.poster?'<img src="'+esc(x.poster)+'" alt="">' : '<div class="art">🎭</div>';rail.appendChild(d);});if(series.length){$("heroTitle").textContent=series[0].title;$("heroDescription").textContent=series[0].synopsis;$("heroArt").textContent=series[0].genre==="Romance"?"💞":series[0].genre==="Thriller"?"🖤":"🎬";$("heroExplore").onclick=()=>openSeries(series[0].id);}else{$("heroTitle").textContent="Every episode ends with a twist.";$("heroDescription").textContent="Dive into romance, revenge, secrets and stories you won't want to pause.";$("heroExplore").onclick=()=>document.getElementById("dramaGrid").scrollIntoView({behavior:"smooth"});}}
 function renderGenres(){const n=$("genres");n.innerHTML="";GENRES.forEach(g=>{const b=document.createElement("button");b.textContent=g;b.className=currentGenre===g?"active":"";b.onclick=()=>{currentGenre=g;renderGenres();render();};n.appendChild(b);});}
-function openSeries(id){selected=series.find(x=>x.id===id);if(!selected)return;currentEpisodes=selected.episodes;$("detailTitle").textContent=selected.title;$("detailGenre").textContent=selected.genre+" · "+currentEpisodes.length+" EPISODES";$("detailSynopsis").textContent=selected.synopsis||"Watch the story unfold, one episode at a time.";$("episodeHeading").textContent="Episodes · "+currentEpisodes.length;$("episodeList").innerHTML="";currentEpisodes.forEach((ep,i)=>{const row=document.createElement("div");row.className="episode";row.innerHTML='<div class="ep-thumb">'+(ep.thumbnailUrl?'<img src="'+esc(ep.thumbnailUrl)+'">':'')+'</div><div class="ep-copy"><strong>EP '+(ep.episodeNumber||i+1)+' · '+esc(ep.episodeTitle||ep.title)+'</strong><small>Season '+(ep.seasonNumber||1)+' · '+Math.ceil((Number(ep.durationSeconds)||0)/60)+' min</small><small>'+esc(ep.description||"")+'</small></div><span>▶</span>';row.onclick=()=>playEpisode(i);$("episodeList").appendChild(row);});$("playFirst").onclick=()=>playEpisode(0);$("detailOverlay").classList.add("open");}
+function openSeries(id){selected=series.find(x=>x.id===id);if(!selected)return;currentEpisodes=selected.episodes;const manage=document.createElement("button");manage.className="btn";manage.id="manageSeriesBtn";manage.textContent="✎ Manage episodes";manage.style.display=auth.currentUser?.email?.toLowerCase()===OWNER?"inline-flex":"none";manage.onclick=()=>openSeriesManager();$("episodeList").before(manage);$("detailTitle").textContent=selected.title;$("detailGenre").textContent=selected.genre+" · "+currentEpisodes.length+" EPISODES";$("detailSynopsis").textContent=selected.synopsis||"Watch the story unfold, one episode at a time.";$("episodeHeading").textContent="Episodes · "+currentEpisodes.length;$("episodeList").innerHTML="";currentEpisodes.forEach((ep,i)=>{const row=document.createElement("div");row.className="episode";row.innerHTML='<div class="ep-thumb">'+(ep.thumbnailUrl?'<img src="'+esc(ep.thumbnailUrl)+'">':'')+'</div><div class="ep-copy"><strong>EP '+(ep.episodeNumber||i+1)+' · '+esc(ep.episodeTitle||ep.title)+'</strong><small>Season '+(ep.seasonNumber||1)+' · '+Math.ceil((Number(ep.durationSeconds)||0)/60)+' min</small><small>'+esc(ep.description||"")+'</small></div><span>▶</span>';row.onclick=()=>playEpisode(i);$("episodeList").appendChild(row);});$("playFirst").onclick=()=>playEpisode(0);$("detailOverlay").classList.add("open");}
+function openSeriesManager(){
+ if(!selected||auth.currentUser?.email?.toLowerCase()!==OWNER)return;
+ $("editSeriesTitle").textContent="Manage "+selected.title;
+ $("manageEpisodeList").innerHTML="";
+ selected.episodes.forEach(ep=>{
+  const row=document.createElement("label");row.style.cssText="display:flex;align-items:center;gap:10px;padding:9px;border:1px solid var(--line);border-radius:10px";
+  const check=document.createElement("input");check.type="checkbox";check.value=ep.id;check.className="deleteEpisodeCheck";
+  const info=document.createElement("span");info.textContent="Season "+(ep.seasonNumber||1)+" · Episode "+(ep.episodeNumber||1)+" · "+(ep.episodeTitle||ep.title);
+  row.append(check,info);$("manageEpisodeList").appendChild(row);
+ });
+ $("addEpisodeCount").value=0;$("addEpisodeSlots").innerHTML="";$("editSeriesMessage").textContent="";
+ $("editSeriesModal").classList.add("open");
+}
+function renderAddEpisodeSlots(){
+ const count=Math.max(0,Math.min(100,Number($("addEpisodeCount").value)||0));
+ $("addEpisodeCount").value=count;$("addEpisodeSlots").innerHTML="";
+ for(let i=0;i<count;i++){
+  const wrap=document.createElement("div");wrap.className="field";wrap.style.margin="0";
+  const label=document.createElement("label");label.textContent="New episode "+(i+1);
+  const input=document.createElement("input");input.type="file";input.accept="video/mp4,video/webm,video/quicktime";input.required=true;input.className="newSeriesEpisode";
+  wrap.append(label,input);$("addEpisodeSlots").appendChild(wrap);
+ }
+}
+$("addEpisodeCount").addEventListener("change",renderAddEpisodeSlots);
+$("closeEditSeries").onclick=()=>$("editSeriesModal").classList.remove("open");
+$("saveSeriesChanges").onclick=async()=>{
+ if(!selected||auth.currentUser?.email?.toLowerCase()!==OWNER)return;
+ const button=$("saveSeriesChanges"),remove=[...document.querySelectorAll(".deleteEpisodeCheck:checked")].map(x=>x.value);
+ const files=[...document.querySelectorAll(".newSeriesEpisode")].map(x=>x.files[0]||null);
+ if(files.some(x=>!x)){ $("editSeriesMessage").textContent="Choose a video for every new episode slot.";return;}
+ if(!remove.length&&!files.length){$("editSeriesMessage").textContent="Select episodes to delete or add new episodes.";return;}
+ if(remove.length&&!confirm("Permanently delete "+remove.length+" selected episode(s)? This also deletes their stored video files."))return;
+ button.disabled=true;
+ try{
+  const token=await auth.currentUser.getIdToken(true);
+  for(let i=0;i<remove.length;i++){
+   $("editSeriesMessage").textContent="Deleting episode "+(i+1)+" of "+remove.length+"...";
+   const res=await fetch(API+"/video/delete",{method:"POST",headers:{Authorization:"Bearer "+token,"Content-Type":"application/json"},body:JSON.stringify({videoId:remove[i]})});
+   const data=await res.json().catch(()=>({}));if(!res.ok)throw new Error(data.error||"Could not delete episode.");
+  }
+  let nextNumber=Math.max(0,...selected.episodes.filter(ep=>!remove.includes(ep.id)).filter(ep=>(Number(ep.seasonNumber)||1)===(Number(selected.episodes[0]?.seasonNumber)||1)).map(ep=>Number(ep.episodeNumber)||0))+1;
+  for(let i=0;i<files.length;i++){
+   const file=files[i],episodeNumber=nextNumber+i,title="Episode "+episodeNumber;
+   $("editSeriesMessage").textContent="Uploading "+title+"...";
+   const duration=await fileDuration(file);
+   const videoUrl=await uploadToR2(file,"video",p=>$("editSeriesMessage").textContent="Uploading "+title+": "+p+"%",token);
+   const videoId=push(dbRef(db,"/douyinflix/publicState/videos")).key;
+   const first=selected.episodes[0]||{};
+   const payload={videoId,title,episodeTitle:title,description:first.description||first.synopsis||selected.synopsis||"",synopsis:selected.synopsis||"",seriesTitle:selected.title,seriesId:selected.id,seasonNumber:Number(first.seasonNumber)||1,episodeNumber,genre:selected.genre,orientation:first.orientation||"vertical",durationSeconds:Math.round(duration),videoUrl,thumbnailUrl:selected.poster||""};
+   const res=await fetch(API+"/publish",{method:"POST",headers:{Authorization:"Bearer "+token,"Content-Type":"application/json"},body:JSON.stringify(payload)});
+   const data=await res.json().catch(()=>({}));if(!res.ok)throw new Error(data.error||"Could not publish "+title+".");
+  }
+  $("editSeriesMessage").textContent="Series updated. Refreshing episode list...";
+  $("editSeriesModal").classList.remove("open");
+  setTimeout(()=>{const fresh=groupSeries().find(x=>x.id===selected.id);if(fresh){selected=fresh;openSeries(fresh.id);}},700);
+ }catch(err){$("editSeriesMessage").textContent="Stopped: "+(err.message||"Update failed.");}
+ finally{button.disabled=false;}
+};
 function closePlayer(){if(heartbeatTimer)clearInterval(heartbeatTimer);heartbeatTimer=null;watchSession=null;$("episodeVideo").pause();$("episodeVideo").removeAttribute("src");$("episodeVideo").load();$("playerOverlay").classList.remove("open");}
 async function startWatch(ep){watchSession=null;if(!auth.currentUser||auth.currentUser.isAnonymous)return;try{const token=await auth.currentUser.getIdToken();const r=await fetch(API+"/watch/start",{method:"POST",headers:{Authorization:"Bearer "+token,"Content-Type":"application/json"},body:JSON.stringify({videoId:ep.id,currentTime:0})});const d=await r.json();if(r.ok&&d.sessionId)watchSession=d.sessionId;}catch(e){console.warn("Watch verification unavailable",e);}}
 async function sendHeartbeat(){const v=$("episodeVideo");if(!watchSession||!auth.currentUser)return;try{const token=await auth.currentUser.getIdToken();const r=await fetch(API+"/watch/heartbeat",{method:"POST",headers:{Authorization:"Bearer "+token,"Content-Type":"application/json"},body:JSON.stringify({sessionId:watchSession,currentTime:v.currentTime,playing:!v.paused&&!v.ended})});const d=await r.json();if(d.verified){watchSession=null;$("playingMeta").textContent="Verified watch recorded. Enjoy the next episode!";}}catch(e){console.warn(e);}}
