@@ -54,6 +54,12 @@
           }
         }
       }
+    },
+    "douyinflix": {
+      "publicState": {
+        ".read": true,
+        ".write": "auth != null && auth.token.email === 'derrickmaena@gmail.com'"
+      }
     }
   }
 }
