@@ -83,7 +83,7 @@
 <div class="field"><label>Season number</label><input id="seasonNumber" type="number" min="1" value="1" required></div>
 <div class="field"><label>Genre</label><select id="genre"><option>Romance</option><option>Revenge</option><option>Billionaire</option><option>Fantasy</option><option>Thriller</option><option>Kids &amp; Family</option><option>Family</option><option>Comedy</option><option>Action</option><option>Werewolf</option><option>Historical</option><option>Other</option></select></div>
 <div class="field"><label>Video orientation</label><select id="orientation"><option value="vertical">Vertical · phone-first</option><option value="horizontal">Horizontal · widescreen</option></select></div>
-<div class="field"><label>All episode video files</label><input id="videoFile" type="file" accept="video/mp4,video/webm,video/quicktime" multiple required><p class="muted">Select every episode in this season at once. Name files with episode numbers, such as Series E01.mp4, Series E02.mp4, or Series Episode 3.mp4. They will be sorted and published in episode order.</p><div class="muted" id="episodeSelection">No episodes selected.</div></div>
+<div class="field"><label>All episode video files</label><input id="videoFile" type="file" accept="video/mp4,video/webm,video/quicktime" multiple required><p class="muted">Select every episode in this season at once. No special filenames needed. Episodes are numbered automatically in the order shown in the selection list and uploaded one after another.</p><div class="muted" id="episodeSelection">No episodes selected.</div></div>
 <div class="field"><label>Drama poster / thumbnail</label><input id="posterFile" type="file" accept="image/*"></div>
 <div class="notice">No episode duration limit. Upload size and network limits may still apply.</div><p class="muted" id="uploadMessage"></p><div class="actions"><button type="button" class="btn" id="closeUpload">Cancel</button><button class="btn primary" id="uploadSubmit" type="submit">Upload all episodes</button></div></form></div></div>
 <script type="module">
@@ -122,20 +122,12 @@ $("search").addEventListener("input",()=>{showPage("home");render();});
 $("closeUpload").onclick=()=>$("uploadModal").classList.remove("open");
 function fileDuration(file){return new Promise((resolve,reject)=>{const v=document.createElement("video");v.preload="metadata";v.onloadedmetadata=()=>{URL.revokeObjectURL(v.src);resolve(v.duration);};v.onerror=()=>reject(new Error("Could not read video duration. Use MP4, WebM or MOV."));v.src=URL.createObjectURL(file);});}
 async function uploadToR2(file,kind,onProgress){const token=await auth.currentUser.getIdToken(true);const init=await fetch(API+"/upload/init",{method:"POST",headers:{Authorization:"Bearer "+token,"Content-Type":"application/json"},body:JSON.stringify({kind,fileName:file.name,contentType:file.type||(kind==="thumbnail"?"image/jpeg":"video/mp4")})});const d=await init.json();if(!init.ok)throw new Error(d.error||"Could not start upload.");const chunkSize=8*1024*1024,count=Math.ceil(file.size/chunkSize),parts=[];try{for(let i=0;i<count;i++){const chunk=file.slice(i*chunkSize,Math.min(file.size,(i+1)*chunkSize));const r=await fetch(API+"/upload/part",{method:"POST",headers:{Authorization:"Bearer "+token,"Content-Type":"application/octet-stream","X-Upload-Key":d.key,"X-Upload-Id":d.uploadId,"X-Part-Number":String(i+1)},body:chunk});const p=await r.json();if(!r.ok)throw new Error(p.error||"Upload part failed.");parts.push({partNumber:i+1,etag:p.etag});onProgress?.(Math.round((i+1)/count*100));}const r=await fetch(API+"/upload/complete",{method:"POST",headers:{Authorization:"Bearer "+token,"Content-Type":"application/json"},body:JSON.stringify({key:d.key,uploadId:d.uploadId,parts})});const done=await r.json();if(!r.ok)throw new Error(done.error||"Could not finish upload.");return done.mediaUrl;}catch(e){fetch(API+"/upload/abort",{method:"POST",headers:{Authorization:"Bearer "+token,"Content-Type":"application/json"},body:JSON.stringify({key:d.key,uploadId:d.uploadId})}).catch(()=>{});throw e;}}
-function getEpisodeNumber(fileName){
- const base=fileName.replace(/\\.[^.]+$/,"");
- const patterns=[/(?:s\\d{1,2})?\\s*(?:e|ep|episode)\\s*[-_. ]*(\\d{1,4})/i,/(?:^|[\\s._-])(\\d{1,4})(?=$|[\\s._-])/];
- for(const pattern of patterns){const match=base.match(pattern);if(match)return Number(match[1]);}
- return null;
-}
 function selectedEpisodes(){
- return [...$("videoFile").files].map(file=>({file,number:getEpisodeNumber(file.name),title:file.name.replace(/\\.[^.]+$/,"").replace(/[._-]+/g," ").trim()})).sort((a,b)=>(a.number??Infinity)-(b.number??Infinity)||a.file.name.localeCompare(b.file.name,undefined,{numeric:true}));
+ return [...$("videoFile").files].map((file,index)=>({file,number:index+1,title:"Episode "+(index+1)}));
 }
 $("videoFile").addEventListener("change",()=>{
- const list=selectedEpisodes(), nums=list.map(x=>x.number), missing=list.filter(x=>!x.number), duplicates=nums.filter((n,i)=>n&&nums.indexOf(n)!==i);
- $("episodeSelection").textContent=list.length?list.map(x=>(x.number?"EP "+x.number:"Missing episode number")+" · "+x.file.name).join("  |  "):"No episodes selected.";
- if(missing.length)$("episodeSelection").textContent+="  ⚠ Add episode numbers to: "+missing.map(x=>x.file.name).join(", ");
- else if(duplicates.length)$("episodeSelection").textContent+="  ⚠ Duplicate episode numbers: "+[...new Set(duplicates)].join(", ");
+ const list=selectedEpisodes();
+ $("episodeSelection").textContent=list.length?list.map(x=>"EP "+String(x.number).padStart(2,"0")+" · "+x.file.name).join("  |  "):"No episodes selected. Episodes will be numbered in the order shown here.";
 });
 $("uploadForm").onsubmit=async e=>{
  e.preventDefault();
@@ -143,9 +135,6 @@ $("uploadForm").onsubmit=async e=>{
  if(!user){$("uploadMessage").textContent="Please log in first.";return;}
  const files=selectedEpisodes();
  if(!files.length){$("uploadMessage").textContent="Select the episode files first.";return;}
- if(files.some(x=>!Number.isInteger(x.number)||x.number<1)){$("uploadMessage").textContent="Every filename needs an episode number, for example E01, EP02 or Episode 3.";return;}
- const nums=files.map(x=>x.number);
- if(new Set(nums).size!==nums.length){$("uploadMessage").textContent="There are duplicate episode numbers. Rename the files so each episode number is unique.";return;}
  const orientation=$("orientation").value,seriesTitle=$("seriesTitle").value.trim(),seasonNumber=Number($("seasonNumber").value)||1,genre=$("genre").value,seriesId=slug(seriesTitle),b=$("uploadSubmit");
  if(!seriesTitle){$("uploadMessage").textContent="Enter the series title.";return;}
  b.disabled=true;
@@ -168,7 +157,7 @@ $("uploadForm").onsubmit=async e=>{
    if(!response.ok)throw new Error(label+" uploaded but could not be published: "+(result.error||"Unknown publishing error."));
    published++;
   }
-  $("uploadMessage").textContent="Success! Published all "+published+" episodes in episode-number order.";
+  $("uploadMessage").textContent="Success! Published all "+published+" episodes in upload order.";
   e.target.reset();$("episodeSelection").textContent="No episodes selected.";
   setTimeout(()=>$("uploadModal").classList.remove("open"),1200);
  }catch(err){
