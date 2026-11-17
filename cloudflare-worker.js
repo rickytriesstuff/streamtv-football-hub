@@ -349,8 +349,7 @@ async function publishVideoToFirebase(request, env, user, origin) {
   const durationSeconds = Number(body.durationSeconds);
   if (!title) throw new Error("Please add a video title.");
   if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) throw new Error("Invalid video duration.");
-  if (orientation === "vertical" && durationSeconds > 120) throw new Error("Vertical videos cannot exceed 2 minutes.");
-  if (orientation === "horizontal" && durationSeconds > 180) throw new Error("Horizontal videos cannot exceed 3 minutes.");
+  // No app-level episode duration cap. R2 and network upload limits still apply.
   const videoUrl = new URL(String(body.videoUrl || ""));
   if (videoUrl.origin !== origin || !videoUrl.pathname.startsWith("/media/")) throw new Error("Video must be uploaded to RickStreams storage first.");
   const videoKey = decodeURIComponent(videoUrl.pathname.slice(7));
@@ -379,7 +378,7 @@ async function publishVideoToFirebase(request, env, user, origin) {
     synopsis: description, isFeatured: body.isFeatured === true,
     viewCountType: "verified_pending"
   };
-  const dbPath = "streamtv/publicState/videos/" + encodeURIComponent(videoId);
+  const dbPath = "douyinflix/publicState/videos/" + encodeURIComponent(videoId);
   const write = await fetch(firebaseUrl(dbPath), {
     method: "PUT",
     headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" },
@@ -662,7 +661,7 @@ export default {
         return reply({ ok:true, migrated:result.migrated, status:"grandfathered" }, 200, origin);
       }
 
-      if (url.pathname.startsWith("/upload/") || url.pathname === "/publish") await requireCreatorOrOwner(request, env);
+      if (url.pathname.startsWith("/upload/") || url.pathname === "/publish") await requireOwner(request, env);
 
       if (url.pathname === "/publish") {
         const user = await requireUser(request, env);
